@@ -56,13 +56,17 @@ app.get("/test-realtime", (req, res) => {
 
     // Ask it to generate a single intro sentence
     const createResponse = {
-      type: "response.create",
-      response: {
-        instructions:
-          "Introduce yourself as Dan from Legacy Wills & Probate in one short sentence."
-      }
-    };
-    oaWs.send(JSON.stringify(createResponse));
+  type: "response.create",
+  response: {
+    instructions:
+      "Say this intro clearly in a friendly UK male voice, with natural short pauses between sentences:" +
+      " 'Hi, it’s Dan from Legacy Wills and Probate.' " +
+      " (short pause) 'You recently reached out about getting some help with a probate matter.' " +
+      " (short pause) 'I’m here to take a few details so we can book you in for a free 30 minute, no obligation consultation.' " +
+      " (short pause) 'Can I start by asking whether a will currently exists?'"
+  }
+};
+oaWs.send(JSON.stringify(createResponse));
   });
 
   oaWs.on("message", (msg) => {
