@@ -1,4 +1,3 @@
-// index.js //
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
@@ -6,41 +5,38 @@ const WebSocket = require("ws");
 const app = express();
 const server = http.createServer(app);
 
-/**
- * Simple check route
- * Opens if you visit: https://lwp-voice-agent-production.up.railway.app/
- */
+// Simple health check route
 app.get("/", (req, res) => {
   res.send("LWP Voice Bot server is running.");
 });
 
-/**
- * Test route to check OpenAI Realtime connection
- * Opens if you visit: https://<your-railway-domain>/test-realtime
- */
-app.get("/test-realtime", (req, res) => {
-  const apiKey = process.env.OPENAI_API_KEY;
+// WebSocket endpoint for Twilio Media Streams
+const wss = new WebSocket.Server({ server, path: "/media" });
 
-  if (!apiKey) {
-    console.error("❌ OPENAI_API_KEY is not set in environment");
-    return res.status(500).send("OPENAI_API_KEY is not set");
-  }
+wss.on("connection", (ws, req) => {
+  console.log("Twilio connected to /media");
 
-  // Connect to OpenAI Realtime via WebSocket
-  const url =
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview";
+  // (Optional) read name from query string if you ever want to use it later
+  const qs = req.url.split("?")[1] || "";
+  const params = new URLSearchParams(qs);
+  const leadNameFromSystem = params.get("name") || null;
+  console.log("Lead name from system (if any):", leadNameFromSystem);
 
-  const oaWs = new WebSocket(url, {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "OpenAI-Beta": "realtime=v1"
+  // Connect to OpenAI Realtime API
+  const oaWs = new WebSocket(
+    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+    {
+      headers: {
+        Authorization: "Bearer " + process.env.OPENAI_API_KEY,
+        "OpenAI-Beta": "realtime=v1"
+      }
     }
-  });
+  );
 
   oaWs.on("open", () => {
-    console.log("✅ OpenAI Realtime socket opened");
+    console.log("🟢 OpenAI Realtime socket opened");
 
-    // Tell the model how to behave on this session
+    // 1) Tell the model how to behave on this session
     const sessionUpdate = {
       type: "session.update",
       session: {
@@ -67,7 +63,7 @@ Call flow
   "Hi, it’s Dan from Legacy Wills and Probate."
   "You recently reached out about getting some help with a probate matter."
   "I’m here to take a few details so we can book you in for a free 30 minute, no obligation consultation."
-  "First of all, can I just check your name?"
+  "First of all, can I just take your name?"
 
 - If they give their name, repeat it back and use it naturally later in the call.
   Example: "Thanks, Sarah. Nice to speak with you."
@@ -113,81 +109,88 @@ Additional behaviour rules
   "That’s exactly what the solicitor can help you with in the consultation. My job is just to get a few details and book that in for you."
 - If they say they’re not ready or don’t want to proceed:
   "No problem at all, I really appreciate your time. If you change your mind, you’re always welcome to get back in touch."
-`
+        `,
         input_audio_format: "pcm16",
-        output_audio_format: "pcm16"
+        output_audio_format: "pcm16",
+        voice: "alloy"
       }
     };
+
     oaWs.send(JSON.stringify(sessionUpdate));
 
-    // Ask it to generate a single intro sentence
-    const createResponse = {
-  type: "response.create",
-  response: {
-    instructions:
-      "Say this intro clearly in a friendly UK male voice, with natural short pauses between sentences:" +
-      " 'Hi, it’s Dan from Legacy Wills and Probate.' " +
-      " (short pause) 'You recently reached out about getting some help with a probate matter.' " +
-      " (short pause) 'I’m here to take a few details so we can book you in for a free 30 minute, no obligation consultation.' " +
-      " (short pause) 'Fist of all, can I check your name?'"
-  }
-};
-oaWs.send(JSON.stringify(createResponse));
+    // 2) Kick off the first spoken response (the opening script)
+    const firstResponse = {
+      type: "response.create",
+      response: {
+        instructions: `
+Follow your call flow and speak the full opening script from step 1, including asking for their name.
+Do not wait for the caller to speak first. Start talking as soon as the call connects.`
+      }
+    };
+
+    oaWs.send(JSON.stringify(firstResponse));
   });
 
-  oaWs.on("message", (msg) => {
-    // For now we just log what the Realtime API sends back
-    console.log("🔁 OpenAI event:", msg.toString());
-  });
-
-  oaWs.on("close", () => {
-    console.log("❌ OpenAI Realtime socket closed");
-  });
-
-  oaWs.on("error", (err) => {
-    console.error("🔥 OpenAI WS error:", err);
-  });
-
-  res.send("Started OpenAI Realtime test – check Railway logs.");
-});
-
-/**
- * WebSocket endpoint for Twilio Media Streams
- * Twilio connects here when your Function returns <Connect><Stream url="wss://.../media" /></Connect>
- */
-const wss = new WebSocket.Server({ server, path: "/media" });
-
-wss.on("connection", (ws) => {
-  console.log("📞 Twilio connected to /media");
-
+  // TWILIO ➜ OPENAI: send caller audio into the model
   ws.on("message", (msg) => {
     let data;
     try {
       data = JSON.parse(msg.toString());
-    } catch (err) {
+    } catch {
       console.log("Non-JSON message from Twilio:", msg.toString());
       return;
     }
 
     if (data.event === "start") {
-      console.log("▶️ Call started:", data.start.callSid);
+      console.log("Call started:", data.start.callSid);
     } else if (data.event === "media") {
-      // This is where the raw audio arrives from Twilio (base64)
-      // We'll forward this to OpenAI later.
-      // For now, just log that we received a chunk.
-      console.log("🎧 Received media chunk (size):", data.media.payload.length);
+      // Audio chunk from Twilio (base64-encoded)
+      oaWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: data.media.payload
+        })
+      );
+      // Tell OpenAI to process what it has so far
+      oaWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.commit"
+        })
+      );
     } else if (data.event === "stop") {
-      console.log("⏹ Call ended");
+      console.log("Call ended");
+      oaWs.close();
     }
   });
 
-  ws.on("close", () => {
-    console.log("🔌 Twilio websocket closed");
+  // OPENAI ➜ TWILIO: send generated audio back to caller
+  oaWs.on("message", (msg) => {
+    let event;
+    try {
+      event = JSON.parse(msg.toString());
+    } catch {
+      return;
+    }
+
+    // Realtime API will stream audio chunks as output_audio_buffer.append
+    if (event.type === "output_audio_buffer.append") {
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          media: {
+            payload: event.audio
+          }
+        })
+      );
+    }
+  });
+
+  oaWs.on("close", () => {
+    console.log("OpenAI websocket closed");
   });
 });
 
-// Start HTTP server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`🚀 LWP Voice Agent server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
