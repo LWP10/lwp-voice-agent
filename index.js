@@ -157,18 +157,22 @@ Then move into the will / executor questions and estate value questions as descr
     if (data.event === "start") {
       console.log("Call started:", data.start.callSid);
     } else if (data.event === "media") {
-      // base64 G.711 audio from Twilio
-      oaWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.append",
-          audio: data.media.payload
-        })
-      );
-      oaWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.commit"
-        })
-      );
+    // Audio from the caller (Twilio -> OpenAI)
+    if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
+      console.log("Skipping media – OpenAI socket not open yet");
+      return;
+    }
+
+    const audioEvent = {
+      type: "input_audio_buffer.append",
+      audio: data.media.payload, // this is Twilio's base64 audio
+    };
+
+    try {
+      oaWs.send(JSON.stringify(audioEvent));
+    } catch (err) {
+      console.log("Error sending audio to OpenAI:", err.message);
+    }
     } else if (data.event === "stop") {
       console.log("Call ended from Twilio side");
       oaWs.close();
