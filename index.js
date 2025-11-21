@@ -16,11 +16,11 @@ const wss = new WebSocket.Server({ server, path: "/media" });
 wss.on("connection", (ws, req) => {
   console.log("Twilio connected to /media");
 
-  // (Optional) read name from query string if you ever want to use it later
+  // Read the lead's name from the query string, if present
   const qs = req.url.split("?")[1] || "";
   const params = new URLSearchParams(qs);
-  const leadNameFromSystem = params.get("name") || null;
-  console.log("Lead name from system (if any):", leadNameFromSystem);
+  const leadName = (params.get("name") || "").trim();
+  console.log("Lead name from system:", leadName || "(none)");
 
   // Connect to OpenAI Realtime API
   const oaWs = new WebSocket(
@@ -33,15 +33,29 @@ wss.on("connection", (ws, req) => {
     }
   );
 
+  oaWs.on("error", (err) => {
+    console.error("OpenAI socket error:", err);
+  });
+
   oaWs.on("open", () => {
     console.log("🟢 OpenAI Realtime socket opened");
 
-    // 1) Tell the model how to behave on this session
+    // 1) Configure the session (G.711 for Twilio + behaviour)
     const sessionUpdate = {
       type: "session.update",
       session: {
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
+        voice: "alloy",
         instructions: `
 You are "Dan", a friendly, calm male virtual assistant calling from Legacy Wills & Probate in the UK.
+
+The caller's name is: "${leadName || ""}".
+
+If a name is provided, use it naturally in the conversation (for example "Hi Sarah" or "Thanks, Sarah") and
+DO NOT ask them for their name again.
+
+If no name is provided (it is blank), you may politely ask for their name once at the start of the call.
 
 Overall goal
 - Have a natural, human-sounding conversation.
@@ -53,23 +67,23 @@ Tone and style
 - Warm, professional, plain English.
 - Short sentences, no jargon.
 - Give the caller time to answer – do not talk over them.
-- Use their name a few times in the call so it feels personal.
+- Use their name a few times in the call so it feels personal (if you know it).
 
 Call flow
 
-1) Opening and name
-- Start the call with this exact intro, with short natural pauses between sentences:
+1) Opening (no name question if we already know it)
+- Start the call with this intro, with short natural pauses between sentences.
+- If you know their name, include it in your greeting (for example "Hi Sarah, it's Dan...").
+- If you do NOT know their name, you may ask once: "First of all, can I just take your name?"
+
+Base opening:
 
   "Hi, it’s Dan from Legacy Wills and Probate."
   "You recently reached out about getting some help with a probate matter."
   "I’m here to take a few details so we can book you in for a free 30 minute, no obligation consultation."
-  "First of all, can I just take your name?"
-
-- If they give their name, repeat it back and use it naturally later in the call.
-  Example: "Thanks, Sarah. Nice to speak with you."
 
 2) Check if there is a Will
-- After learning their name, ask:
+- Then ask:
 
   "Can I start by asking whether there is a will in place for the person who has passed away, or the person you’re calling about?"
 
@@ -79,7 +93,7 @@ Call flow
   - Ask: "Okay, thank you. Are you the next of kin, or another relative who’s helping with things?"
 
 3) Estate value (rough bracket)
-- Once the will / executor question is covered, ask for a rough value:
+- Next, ask for a rough value:
 
   "Just so the solicitor can give you the right guidance, do you have a rough idea of the total estate value, even if it’s only a ballpark? For example, under £100,000, between £100,000 and £325,000, or higher than that?"
 
@@ -91,7 +105,7 @@ Call flow
 
   "The next step is to book your free 30 minute consultation with one of our solicitors, where they can go through everything in detail with you."
 
-- Ask for their preferred day and time and confirm contact details needed for the appointment.
+- Ask for their preferred day and time and confirm the contact details needed for the appointment.
 - Keep things simple and reassuring.
 
 5) Closing the call
@@ -109,29 +123,28 @@ Additional behaviour rules
   "That’s exactly what the solicitor can help you with in the consultation. My job is just to get a few details and book that in for you."
 - If they say they’re not ready or don’t want to proceed:
   "No problem at all, I really appreciate your time. If you change your mind, you’re always welcome to get back in touch."
-        `,
-        input_audio_format: "pcm16",
-        output_audio_format: "pcm16",
-        voice: "alloy"
+        `
       }
     };
 
     oaWs.send(JSON.stringify(sessionUpdate));
 
-    // 2) Kick off the first spoken response (the opening script)
+    // 2) Kick off the opening script immediately
     const firstResponse = {
       type: "response.create",
       response: {
         instructions: `
-Follow your call flow and speak the full opening script from step 1, including asking for their name.
-Do not wait for the caller to speak first. Start talking as soon as the call connects.`
+Start speaking as soon as the call connects.
+Follow your opening script, including mentioning Legacy Wills and Probate and the probate enquiry.
+If a caller name was provided ("${leadName || ""}"), include it naturally in your greeting and DO NOT ask for their name.
+Then move into the will / executor questions and estate value questions as described in your call flow.`
       }
     };
 
     oaWs.send(JSON.stringify(firstResponse));
   });
 
-  // TWILIO ➜ OPENAI: send caller audio into the model
+  // TWILIO ➜ OPENAI: forward caller audio
   ws.on("message", (msg) => {
     let data;
     try {
@@ -144,26 +157,25 @@ Do not wait for the caller to speak first. Start talking as soon as the call con
     if (data.event === "start") {
       console.log("Call started:", data.start.callSid);
     } else if (data.event === "media") {
-      // Audio chunk from Twilio (base64-encoded)
+      // base64 G.711 audio from Twilio
       oaWs.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
           audio: data.media.payload
         })
       );
-      // Tell OpenAI to process what it has so far
       oaWs.send(
         JSON.stringify({
           type: "input_audio_buffer.commit"
         })
       );
     } else if (data.event === "stop") {
-      console.log("Call ended");
+      console.log("Call ended from Twilio side");
       oaWs.close();
     }
   });
 
-  // OPENAI ➜ TWILIO: send generated audio back to caller
+  // OPENAI ➜ TWILIO: send generated audio back
   oaWs.on("message", (msg) => {
     let event;
     try {
@@ -172,7 +184,6 @@ Do not wait for the caller to speak first. Start talking as soon as the call con
       return;
     }
 
-    // Realtime API will stream audio chunks as output_audio_buffer.append
     if (event.type === "output_audio_buffer.append") {
       ws.send(
         JSON.stringify({
