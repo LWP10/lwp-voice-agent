@@ -27,7 +27,7 @@ wss.on("connection", (ws, req) => {
 
   const flags = {}; // for one-time logs
 
-  // 1) Get lead name from query string (…/media?name=Dan)
+  // 1) Get lead name from the URL query string (?name=Dan)
   let leadName = "there";
   try {
     const url = new URL(req.url, "http://dummy");
@@ -61,11 +61,20 @@ wss.on("connection", (ws, req) => {
     const sessionUpdate = {
       type: "session.update",
       session: {
-        // IMPORTANT: Twilio audio is ulaw
+        // Twilio audio is ulaw 8kHz
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         modalities: ["audio", "text"],
         voice: "alloy",
+
+        // Optional but recommended: basic server-side VAD
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
+        },
+
         instructions: `
 You are "Dan", a friendly, calm male virtual assistant calling from Legacy Wills & Probate in the UK.
 
@@ -155,7 +164,7 @@ Rules
     console.error("OpenAI websocket error:", err.message || err);
   });
 
-  // 3) TWILIO → OPENAI (caller audio)
+  // 3) TWILIO → OPENAI (caller audio & start/stop)
   ws.on("message", (msg) => {
     let data;
     try {
@@ -166,7 +175,16 @@ Rules
 
     if (data.event === "start") {
       streamSid = data.start?.streamSid || data.streamSid || null;
-      console.log("Call started:", data.start?.callSid, "streamSid:", streamSid);
+
+      // If in future you use <Parameter> on <Stream>, you can also read:
+      // const customName = data.start?.customParameters?.name;
+
+      console.log(
+        "Call started:",
+        data.start?.callSid,
+        "streamSid:",
+        streamSid
+      );
       return;
     }
 
@@ -180,16 +198,18 @@ Rules
       oaWs.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
-          audio: data.media.payload, // base64 ulaw
+          audio: data.media.payload, // base64 g711_ulaw
         })
       );
       oaWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+      return;
     }
 
     if (data.event === "stop") {
       console.log("Call ended from Twilio side");
       ws.close();
       oaWs.close();
+      return;
     }
   });
 
@@ -209,27 +229,35 @@ Rules
       return;
     }
 
-    // Helpful debug
-    if (event.type === "response.completed") {
+    // Debug: see what we’re getting back
+    // console.log("OpenAI event:", event.type);
+
+    if (event.type === "response.done") {
       console.log("OpenAI finished a response.");
     }
 
-    if (event.type === "output_audio_buffer.append") {
+    // *** IMPORTANT: use response.audio.delta + event.delta ***
+    if (event.type === "response.audio.delta") {
       if (!streamSid) {
         logOnce(flags, "noStreamSid", "Cannot send audio back – no streamSid yet");
         return;
       }
 
-      // event.audio is base64 g711_ulaw
+      // event.delta is base64 g711_ulaw
       ws.send(
         JSON.stringify({
           event: "media",
           streamSid,
           media: {
-            payload: event.audio,
+            payload: event.delta,
           },
         })
       );
+      return;
+    }
+
+    if (event.type === "error") {
+      console.error("OpenAI error event:", JSON.stringify(event, null, 2));
     }
   });
 
