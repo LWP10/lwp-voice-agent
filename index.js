@@ -24,7 +24,6 @@ function logOnce(state, key, msg) {
 
 wss.on("connection", (ws, req) => {
   console.log("Twilio connected to /media");
-  console.log("Incoming WS URL:", req.url);
 
   const flags = {}; // for one-time logs
 
@@ -62,17 +61,13 @@ wss.on("connection", (ws, req) => {
     const sessionUpdate = {
       type: "session.update",
       session: {
+        // Twilio audio is ulaw 8kHz
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         modalities: ["audio", "text"],
+        voice: "alloy",
 
-        // Try a deeper / more neutral voice
-        voice: "onyx",
-
-        // Make it a bit more human / less rigid
-        temperature: 0.7,
-
-        // Basic server-side VAD
+        // Optional but recommended: basic server-side VAD
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
@@ -174,7 +169,7 @@ RULES
     const createResponse = {
       type: "response.create",
       response: {
-        instructions: "Start the call now with your opening script, following the guidelines.",
+        instructions: "Start the call now with your opening script.",
       },
     };
     oaWs.send(JSON.stringify(createResponse));
@@ -196,6 +191,10 @@ RULES
 
     if (data.event === "start") {
       streamSid = data.start?.streamSid || data.streamSid || null;
+
+      // If in future you use <Parameter> on <Stream>, you can also read:
+      // const customName = data.start?.customParameters?.name;
+
       console.log(
         "Call started:",
         data.start?.callSid,
@@ -253,7 +252,7 @@ RULES
       console.log("OpenAI finished a response.");
     }
 
-    // Audio chunks from the model
+    // *** IMPORTANT: use response.audio.delta + event.delta ***
     if (event.type === "response.audio.delta") {
       if (!streamSid) {
         logOnce(flags, "noStreamSid", "Cannot send audio back – no streamSid yet");
