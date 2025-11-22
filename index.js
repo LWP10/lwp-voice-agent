@@ -5,57 +5,48 @@ const WebSocket = require("ws");
 const app = express();
 const server = http.createServer(app);
 
-// Simple health check route
+// Simple health check
 app.get("/", (req, res) => {
   res.send("LWP Voice Bot server is running.");
 });
 
-// WebSocket endpoint for Twilio Media Streams
+// WebSocket server for Twilio
 const wss = new WebSocket.Server({ server, path: "/media" });
 
 wss.on("connection", (ws, req) => {
   console.log("Twilio connected to /media");
 
-  // Read the lead's name from the query string, if present
-  const qs = req.url.split("?")[1] || "";
-  const params = new URLSearchParams(qs);
-  const leadName = (params.get("name") || "").trim();
-  console.log("Lead name from system:", leadName || "(none)");
+  // --- Read lead name from query string ?name=Sarah ---
+  const fullUrl = new URL(req.url, `http://${req.headers.host}`);
+  const leadName = fullUrl.searchParams.get("name") || "there";
+  console.log("Lead name from system:", leadName);
 
-  // Connect to OpenAI Realtime API
+  let streamSid = null;
+
+  // --- Connect to OpenAI Realtime WebSocket ---
   const oaWs = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
     {
       headers: {
-        Authorization: "Bearer " + process.env.OPENAI_API_KEY,
-        "OpenAI-Beta": "realtime=v1"
-      }
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "OpenAI-Beta": "realtime=v1",
+      },
     }
   );
 
-  oaWs.on("error", (err) => {
-    console.error("OpenAI socket error:", err);
-  });
-
+  // When OpenAI socket opens, configure the session and send intro
   oaWs.on("open", () => {
-    console.log("🟢 OpenAI Realtime socket opened");
+    console.log("✅ OpenAI Realtime socket opened");
 
-    // 1) Configure the session (G.711 for Twilio + behaviour)
+    // 1) Session behaviour + voice settings
     const sessionUpdate = {
       type: "session.update",
       session: {
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
-        voice: "alloy",
         instructions: `
 You are "Dan", a friendly, calm male virtual assistant calling from Legacy Wills & Probate in the UK.
 
-The caller's name is: "${leadName || ""}".
-
-If a name is provided, use it naturally in the conversation (for example "Hi Sarah" or "Thanks, Sarah") and
-DO NOT ask them for their name again.
-
-If no name is provided (it is blank), you may politely ask for their name once at the start of the call.
+The caller's name is: "${leadName}". Do NOT ask for their name. Use this name naturally a few times in the call.
+If the name looks generic (like "there" or is missing), just avoid using it.
 
 Overall goal
 - Have a natural, human-sounding conversation.
@@ -67,16 +58,12 @@ Tone and style
 - Warm, professional, plain English.
 - Short sentences, no jargon.
 - Give the caller time to answer – do not talk over them.
-- Use their name a few times in the call so it feels personal (if you know it).
+- Use their name a few times if it sounds like a real name.
 
 Call flow
 
-1) Opening (no name question if we already know it)
-- Start the call with this intro, with short natural pauses between sentences.
-- If you know their name, include it in your greeting (for example "Hi Sarah, it's Dan...").
-- If you do NOT know their name, you may ask once: "First of all, can I just take your name?"
-
-Base opening:
+1) Opening
+- Start the call with this intro structure (you can vary wording slightly, but keep the meaning):
 
   "Hi, it’s Dan from Legacy Wills and Probate."
   "You recently reached out about getting some help with a probate matter."
@@ -93,7 +80,7 @@ Base opening:
   - Ask: "Okay, thank you. Are you the next of kin, or another relative who’s helping with things?"
 
 3) Estate value (rough bracket)
-- Next, ask for a rough value:
+- Then:
 
   "Just so the solicitor can give you the right guidance, do you have a rough idea of the total estate value, even if it’s only a ballpark? For example, under £100,000, between £100,000 and £325,000, or higher than that?"
 
@@ -105,46 +92,50 @@ Base opening:
 
   "The next step is to book your free 30 minute consultation with one of our solicitors, where they can go through everything in detail with you."
 
-- Ask for their preferred day and time and confirm the contact details needed for the appointment.
+- Ask for their preferred day and time and confirm contact details needed for the appointment.
 - Keep things simple and reassuring.
 
 5) Closing the call
 - Once an appointment time is agreed, summarise:
 
-  "Great, [Name]. I’ve booked you in for [day/time]. The solicitor will [call you on / meet you at] [confirmed contact method]."
+  "Great. I’ve booked you in for [day/time]. The solicitor will [call you on / meet you at] [confirmed contact method]."
 
 - End politely:
 
-  "If anything changes before then, just let us know. Thanks for your time today, [Name], and take care."
+  "If anything changes before then, just let us know. Thanks for your time today, and take care."
 
 Additional behaviour rules
 - Never give detailed legal advice – you are only arranging the consultation.
-- If they push for advice, say something like:
+- If they push for advice, say:
   "That’s exactly what the solicitor can help you with in the consultation. My job is just to get a few details and book that in for you."
 - If they say they’re not ready or don’t want to proceed:
   "No problem at all, I really appreciate your time. If you change your mind, you’re always welcome to get back in touch."
-        `
-      }
+      `,
+        // Audio config
+        input_audio_format: "pcm16",
+        output_audio_format: "pcm16",
+        voice: "alloy",
+        turn_detection: { type: "server_vad" }, // let OpenAI handle when to talk/listen
+      },
     };
 
     oaWs.send(JSON.stringify(sessionUpdate));
+    console.log("Session instructions sent to OpenAI");
 
-    // 2) Kick off the opening script immediately
-    const firstResponse = {
+    // 2) Ask OpenAI to start by saying the intro
+    const createResponse = {
       type: "response.create",
       response: {
-        instructions: `
-Start speaking as soon as the call connects.
-Follow your opening script, including mentioning Legacy Wills and Probate and the probate enquiry.
-If a caller name was provided ("${leadName || ""}"), include it naturally in your greeting and DO NOT ask for their name.
-Then move into the will / executor questions and estate value questions as described in your call flow.`
-      }
+        instructions:
+          "Start the conversation now with your friendly opening, as described in the instructions. Do not wait for the caller to speak first.",
+      },
     };
 
-    oaWs.send(JSON.stringify(firstResponse));
+    oaWs.send(JSON.stringify(createResponse));
+    console.log("Intro response.create sent to OpenAI");
   });
 
-  // TWILIO ➜ OPENAI: forward caller audio
+  // --- TWILIO → OPENAI: incoming audio from the call ---
   ws.on("message", (msg) => {
     let data;
     try {
@@ -155,31 +146,37 @@ Then move into the will / executor questions and estate value questions as descr
     }
 
     if (data.event === "start") {
-      console.log("Call started:", data.start.callSid);
+      streamSid = data.start.streamSid;
+      console.log("Call started:", data.start.callSid, "streamSid:", streamSid);
     } else if (data.event === "media") {
-    // Audio from the caller (Twilio -> OpenAI)
-    if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
-      console.log("Skipping media – OpenAI socket not open yet");
-      return;
-    }
+      // Audio from Twilio → send to OpenAI
+      if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
+        console.log("Skipping media - OpenAI socket not open yet");
+        return;
+      }
 
-    const audioEvent = {
-      type: "input_audio_buffer.append",
-      audio: data.media.payload, // this is Twilio's base64 audio
-    };
-
-    try {
-      oaWs.send(JSON.stringify(audioEvent));
-    } catch (err) {
-      console.log("Error sending audio to OpenAI:", err.message);
-    }
+      oaWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: data.media.payload, // base64 audio from Twilio
+        })
+      );
     } else if (data.event === "stop") {
       console.log("Call ended from Twilio side");
+      if (oaWs && oaWs.readyState === WebSocket.OPEN) {
+        oaWs.close();
+      }
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("Twilio websocket closed");
+    if (oaWs && oaWs.readyState === WebSocket.OPEN) {
       oaWs.close();
     }
   });
 
-  // OPENAI ➜ TWILIO: send generated audio back
+  // --- OPENAI → TWILIO: send generated audio back to the call ---
   oaWs.on("message", (msg) => {
     let event;
     try {
@@ -188,13 +185,21 @@ Then move into the will / executor questions and estate value questions as descr
       return;
     }
 
-    if (event.type === "output_audio_buffer.append") {
+    // IMPORTANT: Realtime audio comes as response.audio.delta
+    if (event.type === "response.audio.delta") {
+      if (!streamSid) {
+        console.log("No streamSid yet, cannot send audio back to Twilio");
+        return;
+      }
+
+      // event.delta is base64-encoded audio
       ws.send(
         JSON.stringify({
           event: "media",
+          streamSid: streamSid,
           media: {
-            payload: event.audio
-          }
+            payload: event.delta,
+          },
         })
       );
     }
