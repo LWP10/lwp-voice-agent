@@ -24,6 +24,7 @@ function logOnce(state, key, msg) {
 
 wss.on("connection", (ws, req) => {
   console.log("Twilio connected to /media");
+  console.log("Incoming WS URL:", req.url);
 
   const flags = {}; // for one-time logs
 
@@ -59,26 +60,27 @@ wss.on("connection", (ws, req) => {
 
     // Session behaviour + audio config
     const sessionUpdate = {
-  type: "session.update",
-  session: {
-    input_audio_format: "g711_ulaw",
-    output_audio_format: "g711_ulaw",
-    modalities: ["audio", "text"],
+      type: "session.update",
+      session: {
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
+        modalities: ["audio", "text"],
 
-    // Try a deeper / more neutral voice
-    voice: "onyx",
+        // Try a deeper / more neutral voice
+        voice: "onyx",
 
-    // Make it a bit more human / less rigid
-    temperature: 0.7,
+        // Make it a bit more human / less rigid
+        temperature: 0.7,
 
-    turn_detection: {
-      type: "server_vad",
-      threshold: 0.5,
-      prefix_padding_ms: 300,
-      silence_duration_ms: 500,
-    },
+        // Basic server-side VAD
+        turn_detection: {
+          type: "server_vad",
+          threshold: 0.5,
+          prefix_padding_ms: 300,
+          silence_duration_ms: 500,
+        },
 
-    instructions: `
+        instructions: `
 You are "Dan", a warm, calm **British** male virtual assistant (early 30s) calling from Legacy Wills & Probate in the UK.
 
 LANGUAGE & VOICE
@@ -86,13 +88,14 @@ LANGUAGE & VOICE
 - Do NOT use Spanish or any other language, even briefly.
 - If the caller speaks another language you don't understand, reply in English:
   "I'm really sorry, but I can only help in English at the moment."
-- Sound like a friendly UK call centre agent – relaxed, not robotic, slight conversational pauses.
+- Sound like a friendly UK call centre agent – relaxed, not robotic, with natural pauses.
+- Your voice should sound like a calm British male in his early 30s.
 
 OVERALL GOAL
 - Have a natural, human conversation.
 - Understand the caller's probate situation at a high level.
 - If they seem interested and ready, gently guide them towards booking a free 30-minute, no-obligation consultation with a solicitor.
-- If they are not ready, respect that. Offer help, don't push.
+- If they are not ready, respect that. Offer help, don't push or guilt-trip them.
 
 ABOUT THE CALLER
 - The caller's first name is: ${leadName || "there"}.
@@ -117,11 +120,11 @@ CALL FLOW (GUIDELINE, NOT SCRIPT)
    - Ask one question at a time.
    - Listen to their answer and ask natural follow-ups.
    - Key things to gently find out:
-     - Who has passed away / who the estate belongs to (without prying).
+     - Who has passed away / who the estate belongs to (without prying for unnecessary detail).
      - Whether there is a will.
      - Rough estate value (under/around/over common thresholds).
-   - Rephrase questions if they seem unsure.
-   - If they don't know, reassure them it's okay.
+   - Rephrase questions if they seem unsure or confused.
+   - If they don't know something, reassure them that it's okay.
 
 3) GAUGE READINESS
    - After a short conversation, assess:
@@ -130,7 +133,7 @@ CALL FLOW (GUIDELINE, NOT SCRIPT)
    - If they are **not ready** or say they don't want to book yet:
      - Respect this. Do NOT try to force a booking.
      - Say something like:
-       "No problem at all, ${leadName || "there"}. I can give you some general guidance today and if you ever want to speak to a solicitor, we're here."
+       "No problem at all, ${leadName || "there"}. I can give you some general guidance today, and if you ever want to speak to a solicitor, we're here."
      - Offer to summarise helpful next steps instead of booking.
 
 4) IF THEY **ARE** READY TO BOOK
@@ -160,10 +163,20 @@ RULES
   - Acknowledge it.
   - Do **not** book or imply an appointment has been booked.
   - Do **not** choose a time for them or say "I've saved your appointment" unless they have clearly agreed to it.
-`
-  }
-};
+        `,
+      },
+    };
 
+    oaWs.send(JSON.stringify(sessionUpdate));
+    console.log("Session instructions sent to OpenAI");
+
+    // Kick off the first spoken response
+    const createResponse = {
+      type: "response.create",
+      response: {
+        instructions: "Start the call now with your opening script, following the guidelines.",
+      },
+    };
     oaWs.send(JSON.stringify(createResponse));
     console.log("Intro response.create sent to OpenAI");
   });
@@ -183,10 +196,6 @@ RULES
 
     if (data.event === "start") {
       streamSid = data.start?.streamSid || data.streamSid || null;
-
-      // If in future you use <Parameter> on <Stream>, you can also read:
-      // const customName = data.start?.customParameters?.name;
-
       console.log(
         "Call started:",
         data.start?.callSid,
@@ -244,7 +253,7 @@ RULES
       console.log("OpenAI finished a response.");
     }
 
-    // *** IMPORTANT: use response.audio.delta + event.delta ***
+    // Audio chunks from the model
     if (event.type === "response.audio.delta") {
       if (!streamSid) {
         logOnce(flags, "noStreamSid", "Cannot send audio back – no streamSid yet");
