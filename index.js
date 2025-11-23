@@ -24,6 +24,7 @@ function logOnce(state, key, msg) {
 
 wss.on("connection", (ws, req) => {
   console.log("Twilio connected to /media");
+  console.log("Incoming WS URL:", req.url);
 
   const flags = {}; // for one-time logs
 
@@ -61,18 +62,20 @@ wss.on("connection", (ws, req) => {
     const sessionUpdate = {
       type: "session.update",
       session: {
-        // Twilio audio is ulaw 8kHz
         input_audio_format: "g711_ulaw",
         output_audio_format: "g711_ulaw",
         modalities: ["audio", "text"],
-        voice: "alloy",
 
-        // Optional but recommended: basic server-side VAD
+        voice: "onyx",
+        temperature: 0.7,
+
+        // Let the server decide when you've finished speaking
         turn_detection: {
           type: "server_vad",
           threshold: 0.5,
           prefix_padding_ms: 300,
-          silence_duration_ms: 500,
+          // Wait ~1.2s of silence before starting a reply
+          silence_duration_ms: 1200,
         },
 
         instructions: `
@@ -85,6 +88,7 @@ LANGUAGE & VOICE
   "I'm really sorry, but I can only help in English at the moment."
 - Sound like a friendly UK call centre agent – relaxed, not robotic, with natural pauses.
 - Your voice should sound like a calm British male in his early 30s.
+- Do not interrupt the caller. Wait until they have clearly finished speaking before you reply.
 
 OVERALL GOAL
 - Have a natural, human conversation.
@@ -113,7 +117,7 @@ CALL FLOW (GUIDELINE, NOT SCRIPT)
 
 2) EXPLORE THEIR SITUATION
    - Ask one question at a time.
-   - Listen to their answer and ask natural follow-ups.
+   - Then stay quiet and let them answer fully.
    - Key things to gently find out:
      - Who has passed away / who the estate belongs to (without prying for unnecessary detail).
      - Whether there is a will.
@@ -169,7 +173,7 @@ RULES
     const createResponse = {
       type: "response.create",
       response: {
-        instructions: "Start the call now with your opening script.",
+        instructions: "Start the call now with your opening, following the guidelines and waiting for the caller to finish speaking before each reply.",
       },
     };
     oaWs.send(JSON.stringify(createResponse));
@@ -191,10 +195,6 @@ RULES
 
     if (data.event === "start") {
       streamSid = data.start?.streamSid || data.streamSid || null;
-
-      // If in future you use <Parameter> on <Stream>, you can also read:
-      // const customName = data.start?.customParameters?.name;
-
       console.log(
         "Call started:",
         data.start?.callSid,
@@ -210,14 +210,15 @@ RULES
         return;
       }
 
-      // Forward Twilio audio to OpenAI
+      // IMPORTANT: with server_vad, just append audio.
+      // Do NOT call input_audio_buffer.commit yourself – the server will do it
+      // when it detects the end of a spoken turn.
       oaWs.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
           audio: data.media.payload, // base64 g711_ulaw
         })
       );
-      oaWs.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
       return;
     }
 
@@ -245,27 +246,24 @@ RULES
       return;
     }
 
-    // Debug: see what we’re getting back
     // console.log("OpenAI event:", event.type);
 
     if (event.type === "response.done") {
       console.log("OpenAI finished a response.");
     }
 
-    // *** IMPORTANT: use response.audio.delta + event.delta ***
     if (event.type === "response.audio.delta") {
       if (!streamSid) {
         logOnce(flags, "noStreamSid", "Cannot send audio back – no streamSid yet");
         return;
       }
 
-      // event.delta is base64 g711_ulaw
       ws.send(
         JSON.stringify({
           event: "media",
           streamSid,
           media: {
-            payload: event.delta,
+            payload: event.delta, // base64 g711_ulaw
           },
         })
       );
