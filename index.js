@@ -79,6 +79,7 @@ wss.on("connection", (ws, req) => {
         },
 
         instructions: `
+Only ever speak in **English**
 You are "Dan", a warm, calm **British** male virtual assistant (early 30s) calling from Legacy Wills & Probate in the UK.
 
 LANGUAGE & VOICE
