@@ -66,7 +66,7 @@ wss.on("connection", (ws, req) => {
         output_audio_format: "g711_ulaw",
         modalities: ["audio", "text"],
 
-        voice: "shimer",
+        voice: "shimmer",
         temperature: 0.6,
 
         // Let the server decide when you've finished speaking
@@ -127,6 +127,7 @@ SALES / PRESSURE RULES
 
 CALL FLOW (GUIDELINE, NOT SCRIPT)
 1) OPENING (flexible)
+   - You are to speak **First** before you hear any audio come in you should start with your greeting. This ois the only time you should speak before hearing audio.
    - Greet them by name and explain briefly why you're calling.
    - Example (adapt in your own words, don't copy exactly):
      "Hi ${leadName || "there"}, it's Lucy calling from Legacy Wills and Probate."
