@@ -66,7 +66,7 @@ wss.on("connection", (ws, req) => {
         output_audio_format: "g711_ulaw",
         modalities: ["audio", "text"],
 
-        voice: "coral",
+        voice: "polly",
         temperature: 0.6,
 
         // Let the server decide when you've finished speaking
