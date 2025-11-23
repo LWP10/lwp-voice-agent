@@ -176,7 +176,7 @@ RULES
     const createResponse = {
       type: "response.create",
       response: {
-        instructions: "Start the call in **English** now with your opening, following the guidelines and waiting for the caller to finish speaking before each reply.",
+        instructions: "Start the call in **English** now explaining who you are, you're calling on behalf of Legacy Wills and Probate, following the guidelines and waiting for the caller to finish speaking before each reply.",
       },
     };
     oaWs.send(JSON.stringify(createResponse));
