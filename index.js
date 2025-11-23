@@ -171,16 +171,6 @@ RULES
 
     oaWs.send(JSON.stringify(sessionUpdate));
     console.log("Session instructions sent to OpenAI");
-
-    // Kick off the first spoken response
-    const createResponse = {
-      type: "response.create",
-      response: {
-        instructions: "Start the call in **English** now explaining who you are, you're calling on behalf of Legacy Wills and Probate, following the guidelines and waiting for the caller to finish speaking before each reply.",
-      },
-    };
-    oaWs.send(JSON.stringify(createResponse));
-    console.log("Intro response.create sent to OpenAI");
   });
 
   oaWs.on("error", (err) => {
