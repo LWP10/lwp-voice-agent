@@ -28,23 +28,15 @@ wss.on("connection", (ws, req) => {
 
   const flags = {}; // for one-time logs
 
-  // 1) Get lead name from the URL query string (?name=Dan)
+  // Name + stream will be populated from Twilio "start" event
   let leadName = "there";
-  try {
-    const url = new URL(req.url, "http://dummy");
-    const qName = url.searchParams.get("name");
-    if (qName && qName.trim()) {
-      leadName = qName.trim();
-    }
-  } catch (e) {
-    console.log("Could not parse lead name from URL:", e.message);
-  }
-  console.log("Lead name from system:", leadName);
-
-  // Will be set when we see Twilio's "start" event
   let streamSid = null;
 
-  // 2) Connect to OpenAI Realtime
+  // Track OpenAI socket state so we only send session.update once
+  let oaReady = false;
+  let sessionSent = false;
+
+  // 1) Connect to OpenAI Realtime
   const oaWs = new WebSocket(
     "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
     {
@@ -55,10 +47,12 @@ wss.on("connection", (ws, req) => {
     }
   );
 
-  oaWs.on("open", () => {
-    console.log("✅ OpenAI Realtime socket opened");
+  // Helper to send session.update once we know:
+  // - OpenAI socket is open
+  // - Twilio stream has started (so we have leadName + streamSid)
+  function sendSessionIfReady() {
+    if (!oaReady || !streamSid || sessionSent) return;
 
-    // Session behaviour + audio config
     const sessionUpdate = {
       type: "session.update",
       session: {
@@ -81,20 +75,20 @@ wss.on("connection", (ws, req) => {
         instructions: `
 Only ever speak in **English**.
 
-You are **“Alex”**, a warm, calm, gender-neutral **British** virtual assistant (early 30s) calling from **Legacy Wills & Probate** in the UK. 
+You are **“Alex”**, a warm, calm, gender-neutral **British** virtual assistant (early 30s) calling from **Legacy Wills & Probate** in the UK.
 Your job is to have a natural conversation, understand the caller’s probate situation at a high level, and—if they seem ready—help arrange a free 30-minute consultation with a solicitor.
 
-Do **not** ask for their name. 
-The caller’s name is: **${leadName || "there"}**. 
+Do **not** ask for their name.
+The caller’s name is: **${leadName || "there"}**.
 Use their name naturally and occasionally, not excessively.
 
 ------------------------------------------------------------
 LANGUAGE & VOICE
 ------------------------------------------------------------
-- Always speak in clear, natural **British English**. 
-- You do **not** use an American accent. 
-- Never use Spanish or any other language. 
-- Never say “hola”, “buenos días”, or any Spanish phrase. 
+- Always speak in clear, natural **British English**.
+- You do **not** use an American accent.
+- Never use Spanish or any other language.
+- Never say “hola”, “buenos días”, or any Spanish phrase.
 - If the caller speaks another language, reply in English:
   “I’m really sorry, but I can only help in English at the moment.”
 - Sound like a friendly UK call-centre agent: relaxed, warm, natural pace.
@@ -132,12 +126,13 @@ OVERALL GOAL
 SALES / PRESSURE RULES
 ------------------------------------------------------------
 - Do **not** use salesy or pushy language.
-- Never say things like “does that put your mind at ease?” or “can I lock that in for you?”.
+- Never say things like “does that put my mind at ease?” or “can I lock that in for you?”.
 - If the caller is unsure:
   “That’s absolutely fine, you don’t have to decide anything today.”
 - If they clearly say they do **not** want to book now:
   acknowledge it and move on; do not try to convince them.
 - Don't overuse "just to confirm" too many times close together.
+- You can remind them that the consultation is free and has no obligation if you think that may help get them booked.
 
 ------------------------------------------------------------
 CALL FLOW (GUIDELINE — NOT A SCRIPT)
@@ -145,7 +140,7 @@ CALL FLOW (GUIDELINE — NOT A SCRIPT)
 
 1) OPENING (after the caller says hello)
    - Greet them warmly by name.
-   - Don't act surpriesed when they answer the phone. Don't use phrases like "Oh hello".
+   - Don't act surprised when they answer the phone. Don't use phrases like "Oh hello".
    - Say your name is Alex and you’re calling from Legacy Wills & Probate.
    - Mention briefly that they reached out about probate help.
    - Ask if now is an okay time to speak.
@@ -155,27 +150,26 @@ CALL FLOW (GUIDELINE — NOT A SCRIPT)
    - Ask **one question at a time**.
    - Let them answer fully.
    - Gently find out:
-     • whether someone has passed away / who the estate concerns 
-     • whether there is a will 
-     • rough estate value (low, mid, high) 
+     • whether someone has passed away / who the estate concerns
+     • whether there is a will
+     • rough estate value (low, mid, high)
    - Reassure them if they don’t know something.
 
 3) GAUGE READINESS
    - Assess whether they are:
-     • actively seeking help now 
-     • or just gathering information 
+     • actively seeking help now
+     • or just gathering information
    - If they are **not ready**:
      - respect that completely.
      - say something like:
-       “No problem at all, ${leadName ||
-"there"}. I can give you some general guidance today, and if you ever want to speak to a solicitor, we’re here.”
+       “No problem at all, ${leadName || "there"}. I can give you some general guidance today, and if you ever want to speak to a solicitor, we’re here.”
 
 4) IF THEY ARE READY TO BOOK
    - First confirm clearly:
      “Would you like me to book you in for a free 30-minute consultation with one of our solicitors?”
    - Only if they say **yes**:
-     • ask what days/times work for them 
-     • confirm their number and email if needed 
+     • ask what days/times work for them
+     • confirm their number and email if needed
    - Never invent or assume times. Always ask first.
    - Confirm the final details back to them:
      “So just to confirm, you’re happy with [day/date] at [time], and we’ll call you on [number]?”
@@ -217,14 +211,21 @@ ABSOLUTE RULES
     };
 
     oaWs.send(JSON.stringify(sessionUpdate));
+    sessionSent = true;
     console.log("Session instructions sent to OpenAI");
+  }
+
+  oaWs.on("open", () => {
+    console.log("✅ OpenAI Realtime socket opened");
+    oaReady = true;
+    sendSessionIfReady();
   });
 
   oaWs.on("error", (err) => {
     console.error("OpenAI websocket error:", err.message || err);
   });
 
-  // 3) TWILIO → OPENAI (caller audio & start/stop)
+  // 2) TWILIO → OPENAI (caller audio & start/stop)
   ws.on("message", (msg) => {
     let data;
     try {
@@ -235,18 +236,35 @@ ABSOLUTE RULES
 
     if (data.event === "start") {
       streamSid = data.start?.streamSid || data.streamSid || null;
+
+      // Get the name from customParameters (set in Twilio Function)
+      const cpName = data.start?.customParameters?.name;
+      if (cpName && cpName.trim()) {
+        leadName = cpName.trim();
+        console.log("Lead name from customParameters:", leadName);
+      } else {
+        console.log("No custom name, using default:", leadName);
+      }
+
       console.log(
         "Call started:",
         data.start?.callSid,
         "streamSid:",
         streamSid
       );
+
+      // Now that we (should) know the name and streamSid, send session update if OpenAI is ready
+      sendSessionIfReady();
       return;
     }
 
     if (data.event === "media") {
       if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
-        logOnce(flags, "skipBeforeOpen", "Skipping media - OpenAI socket not open yet");
+        logOnce(
+          flags,
+          "skipBeforeOpen",
+          "Skipping media - OpenAI socket not open yet"
+        );
         return;
       }
 
@@ -277,7 +295,7 @@ ABSOLUTE RULES
     }
   });
 
-  // 4) OPENAI → TWILIO (bot audio)
+  // 3) OPENAI → TWILIO (bot audio)
   oaWs.on("message", (msg) => {
     let event;
     try {
