@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
+const { URL } = require("url"); // <--- added
 
 // --- Express + HTTP server ---
 const app = express();
@@ -28,9 +29,23 @@ wss.on("connection", (ws, req) => {
 
   const flags = {}; // for one-time logs
 
-  // Name + stream will be populated from Twilio "start" event
+  // Name + stream will be populated from:
+  // - query string (?name=daniel) if present
+  // - Twilio "start" event customParameters (can override)
   let leadName = "there";
   let streamSid = null;
+
+  // Try to get name from the WebSocket URL query string first
+  try {
+    const fullUrl = new URL(req.url, "http://localhost");
+    const qsName = fullUrl.searchParams.get("name");
+    if (qsName && qsName.trim()) {
+      leadName = qsName.trim();
+      console.log("Lead name from WS query string:", leadName);
+    }
+  } catch (e) {
+    console.error("Error parsing WS URL for name:", e.message || e);
+  }
 
   // Track OpenAI socket state so we only send session.update once
   let oaReady = false;
@@ -251,7 +266,7 @@ ABSOLUTE RULES
         leadName = cpName.trim();
         console.log("Lead name from customParameters:", leadName);
       } else {
-        console.log("No custom name, using default:", leadName);
+        console.log("No custom name in start event, using:", leadName);
       }
 
       console.log(
@@ -276,9 +291,7 @@ ABSOLUTE RULES
         return;
       }
 
-      // IMPORTANT: with server_vad, just append audio.
-      // Do NOT call input_audio_buffer.commit yourself – the server will do it
-      // when it detects the end of a spoken turn.
+      // With server_vad, just append audio. Server commits when it detects end-of-turn.
       oaWs.send(
         JSON.stringify({
           type: "input_audio_buffer.append",
@@ -311,8 +324,6 @@ ABSOLUTE RULES
     } catch {
       return;
     }
-
-    // console.log("OpenAI event:", event.type);
 
     if (event.type === "response.done") {
       console.log("OpenAI finished a response.");
