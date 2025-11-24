@@ -238,6 +238,11 @@ ABSOLUTE RULES
     }
 
     if (data.event === "start") {
+      console.log(
+        "Start event payload:",
+        JSON.stringify(data.start, null, 2)
+      );
+
       streamSid = data.start?.streamSid || data.streamSid || null;
 
       // Get the name from customParameters (set in Twilio Function)
@@ -315,7 +320,11 @@ ABSOLUTE RULES
 
     if (event.type === "response.audio.delta") {
       if (!streamSid) {
-        logOnce(flags, "noStreamSid", "Cannot send audio back – no streamSid yet");
+        logOnce(
+          flags,
+          "noStreamSid",
+          "Cannot send audio back – no streamSid yet"
+        );
         return;
       }
 
