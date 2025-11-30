@@ -70,8 +70,8 @@ wss.on("connection", (ws, req) => {
       type: "session.update",
       session: {
         // Audio in/out config MUST match Twilio (g711_ulaw)
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
+        input_audio_format: "g711-ulaw",
+        output_audio_format: "g711-ulaw",
         modalities: ["audio", "text"],
 
         voice: "ballad",
