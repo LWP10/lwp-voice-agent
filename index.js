@@ -125,6 +125,7 @@ STYLE & PERSONALITY
 ------------------------------------------------------------
 CONVERSATION RHYTHM
 ------------------------------------------------------------
+- Let the caller say “hello” or speak first, then respond naturally.
 - Do not interrupt the caller; wait for a clear pause before speaking.
 - When the caller gives a long answer, briefly summarise what they said in one short sentence, then ask your next helpful question.
 - Do not give long explanations unless the caller asks for detail.
@@ -154,8 +155,7 @@ CALL FLOW (GUIDELINE — NOT A SCRIPT)
 ------------------------------------------------------------
 
 1) OPENING
-  - The system will play an opening line for you to speak at the very start of the call.
-  - Greet them warmly by name if it sounds appropriate.
+  - When the caller has said hello or you hear them on the line, greet them warmly by name.
   - Say your name is Alex, the Legacy Wills & Probate Assistant.
   - Mention briefly that you understand they are looking for help with a probate matter.
   - Mention you’re here to ask a few details to arrange a free 30 minute consultation with one of our solicitors.
@@ -169,7 +169,7 @@ CALL FLOW (GUIDELINE — NOT A SCRIPT)
     • whether someone has passed away / who the estate concerns
     • whether there is a will in place
     • whether they are the executor or next of kin
-    • a rough estate value (for example, under £325,000 or over £325,000)
+    • a rough estate value (for example, **under £325,000 or over £325,000**)
   - Reassure them if they don’t know something.
 
   - If the caller says they are handling probate themselves:
@@ -238,7 +238,7 @@ ABSOLUTE RULES
     sessionSent = true;
     console.log("Session instructions sent to OpenAI");
 
-    // Now send a response.create to make Alex talk first
+    // 🔊 Make Alex talk first using response.create
     const introResponse = {
       type: "response.create",
       response: {
@@ -252,7 +252,7 @@ Open the call in a warm, natural way, for example:
 "I’m just going to take a few quick details so we can look at arranging a free 30 minute, no-obligation consultation with one of our solicitors."
 "Is now an okay time to have a quick chat?"
 
-Then follow the call flow from your instructions: explore their situation, ask about whether there is a will, whether they are executor or next of kin, ask if the estate is under or over £325,000, and if they seem ready, gently discuss booking a consultation.
+Then follow your call flow from the instructions: explore their situation, ask about whether there is a will, whether they are executor or next of kin, ask if the estate is under or over £325,000, and if they seem ready, gently discuss booking a consultation.
         `,
       },
     };
@@ -304,7 +304,7 @@ Then follow the call flow from your instructions: explore their situation, ask a
         streamSid
       );
 
-      // Now that we know the name and streamSid, send session update if OpenAI is ready
+      // Now that we (should) know the name and streamSid, send session update if OpenAI is ready
       sendSessionIfReady();
       return;
     }
