@@ -170,8 +170,9 @@ CALL FLOW (GUIDELINE — NOT A SCRIPT)
    - Gently find out:
      • whether someone has passed away / who the estate concerns
      • whether there is a will
-     • rough estate value (low, mid, high)
+     • rough estate value (under/over £325,000)
    - Reassure them if they don’t know something.
+   - If they say they're handling probate themselves, respond with empathy and support. Aknowledge their decision and inform that probate can be difficult in a supportive manner and offer guidance if it becomes too tricky etc.
 
 3) GAUGE READINESS
    - Assess whether they are:
