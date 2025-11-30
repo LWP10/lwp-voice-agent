@@ -70,8 +70,8 @@ wss.on("connection", (ws, req) => {
       type: "session.update",
       session: {
         // Audio in/out config MUST match Twilio (g711_ulaw)
-        input_audio_format: "g711-ulaw",
-        output_audio_format: "g711-ulaw",
+        input_audio_format: "g711_ulaw",
+        output_audio_format: "g711_ulaw",
         modalities: ["audio", "text"],
 
         voice: "ballad",
@@ -195,12 +195,15 @@ IF THEY’RE NOT READY TO BOOK
 
   // Send a single intro so the bot talks first
   function maybeSendIntro() {
-    if (!oaReady || !sessionSent || !streamSid || introSent) return;
+  if (!oaReady || !sessionSent || !streamSid || introSent) return;
 
-    const intro = {
-      type: "response.create",
-      response: {
-        instructions: `
+  const intro = {
+    type: "response.create",
+    response: {
+      modalities: ["audio", "text"],      // 👈 important
+      voice: "ballad",                    // optional but explicit
+      output_audio_format: "g711_ulaw",   // match Twilio
+      instructions: `
 Start the conversation now with a short, friendly greeting.
 
 - Use the caller's name: ${leadName || "there"}.
@@ -208,14 +211,14 @@ Start the conversation now with a short, friendly greeting.
 - Mention you understand they recently reached out about getting some help with a probate matter.
 - Explain you’ll ask a few quick questions and, if they’d like, arrange a free 30-minute, no-obligation consultation with a solicitor.
 - Finish by asking if now is an okay time to talk.
-        `,
-      },
-    };
+      `,
+    },
+  };
 
-    oaWs.send(JSON.stringify(intro));
-    introSent = true;
-    console.log("Intro response.create sent to OpenAI");
-  }
+  oaWs.send(JSON.stringify(intro));
+  introSent = true;
+  console.log("Intro response.create sent to OpenAI");
+}
 
   oaWs.on("open", () => {
     console.log("✅ OpenAI Realtime socket opened");
