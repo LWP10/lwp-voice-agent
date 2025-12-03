@@ -3,116 +3,15 @@ const http = require("http");
 const WebSocket = require("ws");
 const { URL } = require("url");
 
-// NEW: for recording download + Whisper + summary
-const axios = require("axios");
-const fs = require("fs");
-const path = require("path");
-const OpenAI = require("openai");
-
 const app = express();
 const server = http.createServer(app);
-
-// Allow Twilio form posts (RecordingStatusCallback)
-app.use(express.urlencoded({ extended: false }));
 
 // Simple health-check route
 app.get("/", (req, res) => {
   res.send("LWP Voice Bot server is running.");
 });
 
-///////////////////////////////////////////////////////////////////////////////
-// 🔥 NEW: Twilio Recording Status Callback -> Whisper transcription -> summary
-///////////////////////////////////////////////////////////////////////////////
-
-// Zapier's Twilio API call must include, e.g.:
-//
-// &Record=true
-// &RecordingStatusCallback=https://YOUR-RAILWAY-URL/twilio/recording-complete
-// &RecordingStatusCallbackMethod=POST
-//
-app.post("/twilio/recording-complete", async (req, res) => {
-  console.log("Recording callback body:", req.body);
-
-  const { RecordingSid, RecordingUrl, CallSid, From, To } = req.body;
-
-  if (!RecordingSid || !RecordingUrl) {
-    console.log("Missing RecordingSid or RecordingUrl");
-    return res.status(400).send("Missing required fields");
-  }
-
-  try {
-    // 1) Download MP3 from Twilio
-    const audioUrl = `${RecordingUrl}.mp3`;
-    console.log("Downloading recording:", audioUrl);
-
-    const twilioSid = process.env.TWILIO_ACCOUNT_SID;
-    const twilioAuth = process.env.TWILIO_AUTH_TOKEN;
-
-    const audioResp = await axios.get(audioUrl, {
-      responseType: "arraybuffer",
-      auth: {
-        username: twilioSid,
-        password: twilioAuth,
-      },
-    });
-
-    const tempPath = path.join("/tmp", `${RecordingSid}.mp3`);
-    fs.writeFileSync(tempPath, audioResp.data);
-    console.log("Saved MP3 to:", tempPath);
-
-    // 2) Transcribe with Whisper / GPT-4o Transcribe
-    const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-    const transcription = await client.audio.transcriptions.create({
-      // use a transcription-capable model available to your project
-      // e.g. "gpt-4o-mini-transcribe", "gpt-4o-transcribe", or "whisper-1"
-      model: "gpt-4o-mini-transcribe",
-      file: fs.createReadStream(tempPath),
-    });
-
-    const transcriptText = transcription.text;
-    console.log("Transcript length:", transcriptText.length);
-
-    // 3) Summarise the call
-    const summaryResp = await client.responses.create({
-      model: "gpt-4.1-mini",
-      input: `
-You are summarising a recorded probate / estate planning call.
-
-Transcript:
-"""${transcriptText}"""
-
-Please provide:
-- A short 3–5 sentence overview of the situation.
-- Bullet points for key facts: who passed away, executor/next of kin, rough estate size (under or over £325k), whether there's a will, and urgency.
-- Bullet points for recommended next steps for the solicitor.
-- Date and time of consultation (if booked)
-      `,
-    });
-
-    const summary = summaryResp.output[0].content[0].text;
-    console.log("Call summary:\n", summary);
-
-// Send summary + transcript to Zapier / email / Sheets
-    await axios.post(process.env.ZAPIER_HOOK_URL, {
-  callSid: CallSid,
-  from: From,
-  to: To,
-  transcript: transcriptText,   // full text (if you want it)
-  summary,                      // your short version
-});
-    
-    res.status(200).send("OK");
-  } catch (err) {
-    console.error("Error handling recording callback:", err.message || err);
-    res.status(500).send("Error");
-  }
-});
-
-///////////////////////////////////////////////////////////////
-// Twilio WebSocket server at /media  (your existing voice agent)
-///////////////////////////////////////////////////////////////
-
+// Twilio WebSocket server at /media
 const wss = new WebSocket.Server({ server, path: "/media" });
 
 // Helper to avoid spamming the same log line
@@ -227,7 +126,7 @@ OVERALL GOAL
 OPENING
 ------------------------------------------------------------
 - You speak **first**, as soon as the call connects.
-- Greet them warmly using their name, e.g. “Hi ${leadName || "there"}, it’s Alex calling from Legacy Wills & Probate.”
+- Greet them warmly using their name, e.g. “Hi Daniel, it’s Alex calling from Legacy Wills & Probate.”
 - Mention briefly that you’re calling because they recently reached out about getting some help with a probate matter.
 - Explain that you’ll ask a few quick questions and, if they’d like, arrange a free 30-minute, no-obligation consultation with a solicitor.
 - Ask if now is an okay time to talk.
