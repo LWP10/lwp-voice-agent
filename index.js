@@ -86,21 +86,22 @@ Please provide:
 - A short 3–5 sentence overview of the situation.
 - Bullet points for key facts: who passed away, executor/next of kin, rough estate size (under or over £325k), whether there's a will, and urgency.
 - Bullet points for recommended next steps for the solicitor.
+- Date and time of consultation (if booked)
       `,
     });
 
     const summary = summaryResp.output[0].content[0].text;
     console.log("Call summary:\n", summary);
 
-    // OPTIONAL: send summary + transcript to Zapier / email / Sheets
-    // await axios.post(process.env.ZAPIER_HOOK_URL, {
-    //   callSid: CallSid,
-    //   from: From,
-    //   to: To,
-    //   transcript: transcriptText,
-    //   summary,
-    // });
-
+// Send summary + transcript to Zapier / email / Sheets
+    await axios.post(process.env.https://hooks.zapier.com/hooks/catch/21660652/ukiq8ka/, {
+  callSid: CallSid,
+  from: From,
+  to: To,
+  transcript: transcriptText,   // full text (if you want it)
+  summary,                      // your short version
+});
+    
     res.status(200).send("OK");
   } catch (err) {
     console.error("Error handling recording callback:", err.message || err);
