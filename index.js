@@ -94,7 +94,7 @@ Please provide:
     console.log("Call summary:\n", summary);
 
 // Send summary + transcript to Zapier / email / Sheets
-    await axios.post(process.env.https://hooks.zapier.com/hooks/catch/21660652/ukiq8ka/, {
+    await axios.post(process.env.ZAPIER_HOOK_URL, {
   callSid: CallSid,
   from: From,
   to: To,
