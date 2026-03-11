@@ -82,7 +82,7 @@ wss.on("connection", (ws, req) => {
           type: "server_vad",
           threshold: 0.5,
           prefix_padding_ms: 300,
-          silence_duration_ms: 1200,
+          silence_duration_ms: 1600,
         },
 
         // === MAIN BEHAVIOUR PROMPT ===
@@ -238,7 +238,7 @@ IF THEY’RE NOT READY TO BOOK
     maybeSendIntro();
   }
 
- // Send a single intro so the bot talks first
+  // Send a single intro so the bot talks first
   function maybeSendIntro() {
     if (!oaReady || !sessionSent || !streamSid || introSent) return;
 
@@ -248,26 +248,13 @@ IF THEY’RE NOT READY TO BOOK
         instructions: `
 Start the conversation now with a short, calm, professional greeting.
 
-Use exactly the same opening content and meaning as already instructed.
-Do not change the wording unnecessarily.
-The opening must be delivered in this timing structure:
-
-1. First say the greeting using the caller's name.
-2. Then pause naturally.
-3. Then mention that they recently reached out about getting some help with a probate matter.
-4. Then pause naturally.
-5. Then explain that you’ll ask a few quick questions and, if they’d like, help arrange a free 30-minute, no-obligation consultation with a solicitor.
-6. Then pause naturally.
-7. Then ask: is now an okay time to talk?
-8. Stop speaking completely after that question and wait for the caller to answer.
-
-Important timing rules:
-- Treat each part above as a separate spoken step.
-- Do not merge the steps into one continuous paragraph.
-- Do not ask more than one question in the opening.
-- Do not continue speaking after the final question.
-- Leave a natural pause between each step.
+- Use the caller's name: ${leadName || "there"}.
+- Say you are Alex calling from Legacy Wills & Probate.
+- Mention you understand they recently reached out about getting some help with a probate matter.
+- Explain you’ll ask a few quick questions and, if they’d like, help arrange a free 30-minute, no-obligation consultation with a solicitor.
+- Finish by asking if now is an okay time to talk.
 - Keep the tone measured, not enthusiastic.
+- Ask only one question, then stop and wait for the caller to answer.
         `,
       },
     };
