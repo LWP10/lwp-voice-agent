@@ -82,7 +82,7 @@ wss.on("connection", (ws, req) => {
           type: "server_vad",
           threshold: 0.5,
           prefix_padding_ms: 400,
-          silence_duration_ms: 1700,
+          silence_duration_ms: 1600,
         },
 
         // === MAIN BEHAVIOUR PROMPT ===
