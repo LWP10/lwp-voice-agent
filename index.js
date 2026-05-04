@@ -8,7 +8,7 @@ const server = http.createServer(app);
 
 // Simple health-check route
 app.get("/", (req, res) => {
-  res.send("LWP Voice Bot server is running.");
+res.send("LWP Voice Bot server is running.");
 });
 
 // Twilio WebSocket server at /media
@@ -16,77 +16,72 @@ const wss = new WebSocket.Server({ server, path: "/media" });
 
 // Helper to avoid spamming the same log line
 function logOnce(state, key, msg) {
-  if (!state[key]) {
-    console.log(msg);
-    state[key] = true;
-  }
+if (!state[key]) {
+console.log(msg);
+state[key] = true;
+}
 }
 
 wss.on("connection", (ws, req) => {
-  console.log("Twilio connected to /media");
-  console.log("Incoming WS URL:", req.url);
+console.log("Twilio connected to /media");
+console.log("Incoming WS URL:", req.url);
 
-  const flags = {}; // for one-time logs
+const flags = {};
 
-  // Lead name + stream info
-  let leadName = "there"; // default if we don't know name
-  let streamSid = null;
+let leadName = "there";
+let streamSid = null;
 
-  // Try to read name from WS URL query string (?name=Daniel)
-  try {
-    const fullUrl = new URL(req.url, "http://localhost");
-    const qsName = fullUrl.searchParams.get("name");
-    if (qsName && qsName.trim()) {
-      leadName = qsName.trim();
-      console.log("Lead name from WS query string:", leadName);
-    }
-  } catch (e) {
-    console.error("Error parsing WS URL for name:", e.message || e);
-  }
+try {
+const fullUrl = new URL(req.url, "http://localhost");
+const qsName = fullUrl.searchParams.get("name");
+if (qsName && qsName.trim()) {
+leadName = qsName.trim();
+console.log("Lead name from WS query string:", leadName);
+}
+} catch (e) {
+console.error("Error parsing WS URL for name:", e.message || e);
+}
 
-  // --- OpenAI Realtime socket state ---
-  let oaReady = false;
-  let sessionSent = false;
-  let introSent = false;
+// --- OpenAI Realtime socket state ---
+let oaReady = false;
+let sessionSent = false;
+let introSent = false;
 
-  // 1) Connect to OpenAI Realtime API
-  const oaWs = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-        "OpenAI-Beta": "realtime=v1",
-      },
-    }
-  );
+// --- Barge-in handling ---
+let aiSpeaking = false;
+let lastBargeInAt = 0;
 
-  // Send session.update when:
-  // - OpenAI socket is open
-  // - We have a streamSid (Twilio start event)
-  function sendSessionIfReady() {
-    if (!oaReady || !streamSid || sessionSent) return;
+const oaWs = new WebSocket(
+"wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview",
+{
+headers: {
+Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+"OpenAI-Beta": "realtime=v1",
+},
+}
+);
 
-    const sessionUpdate = {
-      type: "session.update",
-      session: {
-        // Audio in/out config MUST match Twilio (g711_ulaw)
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
-        modalities: ["audio", "text"],
+function sendSessionIfReady() {
+if (!oaReady || !streamSid || sessionSent) return;
 
-        voice: "ballad",
-        temperature: 0.7,
+const sessionUpdate = {
+type: "session.update",
+session: {
+input_audio_format: "g711_ulaw",
+output_audio_format: "g711_ulaw",
+modalities: ["audio", "text"],
 
-        // Let the server detect when caller finished speaking
-        turn_detection: {
-          type: "server_vad",
-          threshold: 0.5,
-          prefix_padding_ms: 400,
-          silence_duration_ms: 1600,
-        },
+voice: "ballad",
+temperature: 0.7,
 
-        // === MAIN BEHAVIOUR PROMPT ===
-        instructions: `
+turn_detection: {
+type: "server_vad",
+threshold: 0.5,
+prefix_padding_ms: 400,
+silence_duration_ms: 1600,
+},
+
+instructions: `
 Only ever speak in **English**.
 
 You are **“Alex”**, a calm, measured, gender-neutral **British** virtual assistant (early 30s) calling from **Legacy Wills & Probate** in the UK.
@@ -133,13 +128,14 @@ TURN-TAKING RULES
 ------------------------------------------------------------
 - Never interrupt the caller.
 - Never talk over the caller.
+- If the caller begins speaking while you are speaking, stop immediately and listen.
 - Always wait until the caller has clearly finished speaking before replying.
 - If the caller pauses briefly, do not jump in too quickly.
 - If audio cuts out, the signal is poor, or you are not sure whether they have finished, wait before speaking.
 - If you are unsure whether the caller has finished, say:
-  “I’m sorry — please go ahead.”
+“I’m sorry — please go ahead.”
 - If you think you may have interrupted, say:
-  “Sorry, I didn’t mean to interrupt — please go ahead.”
+“Sorry, I didn’t mean to interrupt — please go ahead.”
 - Do not continue speaking after asking a question unless the caller has replied.
 - Leave natural gaps in the conversation.
 
@@ -175,27 +171,27 @@ OPENING
 KEY QUESTIONS (GUIDELINE)
 ------------------------------------------------------------
 1) Check broadly what’s going on:
-   - Who has passed away, or who the probate relates to.
-   - Whether they are the executor, next of kin, or another relative.
-   - Be sensitive and respectful.
+- Who has passed away, or who the probate relates to.
+- Whether they are the executor, next of kin, or another relative.
+- Be sensitive and respectful.
 
 2) Will / executor:
-   - Ask if there is a will.
-   - If YES: ask if they are the executor or another family member.
-   - If NO: ask if they are the next of kin or another relative helping with things.
+- Ask if there is a will.
+- If YES: ask if they are the executor or another family member.
+- If NO: ask if they are the next of kin or another relative helping with things.
 
 3) Estate value (under / over £325k):
-   - Ask: “Just so the solicitor can give you the right guidance, would you say the estate is likely under £325,000, or over £325,000?”
-   - If they don’t know, reassure them that it’s okay and the solicitor can go through the details later.
+- Ask: “Just so the solicitor can give you the right guidance, would you say the estate is likely under £325,000, or over £325,000?”
+- If they don’t know, reassure them that it’s okay and the solicitor can go through the details later.
 
 ------------------------------------------------------------
 IF THE CALLER SAYS THEY’RE HANDLING PROBATE THEMSELVES
 ------------------------------------------------------------
 - Acknowledge their effort and stress:
-  - “That sounds like a lot to deal with, you’re doing really well handling it yourself.”
+- “That sounds like a lot to deal with, you’re doing really well handling it yourself.”
 - Make it clear you’re there to support, not judge.
 - If things sound complex or they say it’s getting tricky:
-  - “If it starts to feel too much or complicated, that’s exactly what our solicitors can help you with in the free consultation.”
+- “If it starts to feel too much or complicated, that’s exactly what our solicitors can help you with in the free consultation.”
 
 ------------------------------------------------------------
 BOOKING RULES
@@ -204,7 +200,7 @@ BOOKING RULES
 - Never offer evenings or weekends.
 - Ask what days or times work best for them.
 - Confirm the agreed slot back clearly:
-  - Day, date, time, and that a solicitor will call them on their number.
+- Day, date, time, and that a solicitor will call them on their number.
 - Never invent a time or imply a booking unless they clearly agree.
 - If they are hesitant, keep the tone low-pressure and professional.
 
@@ -213,16 +209,16 @@ LEGAL LIMITS
 ------------------------------------------------------------
 - Never give detailed legal advice.
 - If they ask for legal advice, say:
-  “That’s something a solicitor can help you with in the consultation. My role is just to take a few details and help arrange that for you if you’d like.”
+“That’s something a solicitor can help you with in the consultation. My role is just to take a few details and help arrange that for you if you’d like.”
 
 ------------------------------------------------------------
 IF THE CALLER IS HARD TO HEAR
 ------------------------------------------------------------
 - If the audio is unclear, ask politely for them to repeat themselves.
 - Say things like:
-  “Sorry, the line just cut slightly — could you repeat that for me?”
-  or
-  “Sorry, I didn’t quite catch that — would you mind saying that again?”
+“Sorry, the line just cut slightly — could you repeat that for me?”
+or
+“Sorry, I didn’t quite catch that — would you mind saying that again?”
 - Do not pretend you understood if you are unsure.
 
 ------------------------------------------------------------
@@ -230,28 +226,26 @@ IF THEY’RE NOT READY TO BOOK
 ------------------------------------------------------------
 - Respect that completely, do not push.
 - Say something like:
-  “No problem at all, ${leadName || "there"}. If you’d prefer to wait, that’s absolutely fine. If you ever want some help or a second opinion, you’re always welcome to get back in touch.”
+“No problem at all, ${leadName || "there"}. If you’d prefer to wait, that’s absolutely fine. If you ever want some help or a second opinion, you’re always welcome to get back in touch.”
 - Always end warmly, calmly, and politely.
-        `,
-      },
-    };
+`,
+},
+};
 
-    oaWs.send(JSON.stringify(sessionUpdate));
-    sessionSent = true;
-    console.log("Session instructions sent to OpenAI");
+oaWs.send(JSON.stringify(sessionUpdate));
+sessionSent = true;
+console.log("Session instructions sent to OpenAI");
 
-    // We may now be able to send the intro
-    maybeSendIntro();
-  }
+maybeSendIntro();
+}
 
-  // Send a single intro so the bot talks first
-  function maybeSendIntro() {
-    if (!oaReady || !sessionSent || !streamSid || introSent) return;
+function maybeSendIntro() {
+if (!oaReady || !sessionSent || !streamSid || introSent) return;
 
-    const intro = {
-      type: "response.create",
-      response: {
-        instructions: `
+const intro = {
+type: "response.create",
+response: {
+instructions: `
 Start the conversation now with a short, calm, professional greeting.
 
 - Use the caller's name: ${leadName || "there"}.
@@ -261,179 +255,192 @@ Start the conversation now with a short, calm, professional greeting.
 - Finish by asking if now is an okay time to talk.
 - Keep the tone measured, not enthusiastic.
 - Ask only one question, then stop and wait for the caller to answer.
-        `,
-      },
-    };
+`,
+},
+};
 
-    oaWs.send(JSON.stringify(intro));
-    introSent = true;
-    console.log("Intro response.create sent to OpenAI");
-  }
+oaWs.send(JSON.stringify(intro));
+introSent = true;
+console.log("Intro response.create sent to OpenAI");
+}
 
-  oaWs.on("open", () => {
-    console.log("✅ OpenAI Realtime socket opened");
-    oaReady = true;
-    sendSessionIfReady();
-  });
-
-  oaWs.on("error", (err) => {
-    console.error("OpenAI websocket error:", err.message || err);
-  });
-
-  // 2) TWILIO → OPENAI (caller audio & call lifecycle)
-  ws.on("message", (msg) => {
-    let data;
-    try {
-      data = JSON.parse(msg.toString());
-    } catch {
-      return;
-    }
-
-    if (data.event === "start") {
-      console.log(
-        "Start event payload:",
-        JSON.stringify(data.start, null, 2)
-      );
-
-      streamSid = data.start?.streamSid || data.streamSid || null;
-
-      // Name from customParameters (sent by Twilio Function)
-      const cpName = data.start?.customParameters?.name;
-      if (cpName && cpName.trim()) {
-        leadName = cpName.trim();
-        console.log("Lead name from customParameters:", leadName);
-      } else {
-        console.log("No custom name in start event, using:", leadName);
-      }
-
-      console.log(
-        "Call started:",
-        data.start?.callSid,
-        "streamSid:",
-        streamSid
-      );
-
-      // Now we can send session.update (and possibly intro)
-      sendSessionIfReady();
-      maybeSendIntro();
-      return;
-    }
-
-    if (data.event === "media") {
-      if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
-        logOnce(
-          flags,
-          "skipBeforeOpen",
-          "Skipping media - OpenAI socket not open yet"
-        );
-        return;
-      }
-
-      // Send the audio chunk into OpenAI's input buffer
-      oaWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.append",
-          audio: data.media.payload, // base64 g711_ulaw
-        })
-      );
-      return;
-    }
-
-    if (data.event === "stop") {
-      console.log("Call ended from Twilio side");
-      ws.close();
-      oaWs.close();
-      return;
-    }
-  });
-
-  ws.on("close", () => {
-    console.log("Twilio websocket closed");
-    if (oaWs && oaWs.readyState === WebSocket.OPEN) {
-      oaWs.close();
-    }
-  });
-
-  // 3) OPENAI → TWILIO (bot audio back to caller)
-  oaWs.on("message", (msg) => {
-    let event;
-    try {
-      event = JSON.parse(msg.toString());
-    } catch {
-      return;
-    }
-
-    if (event.type) {
-      console.log("OpenAI event:", event.type);
-    }
-
-    if (event.type === "response.done") {
-      console.log("OpenAI finished a response.");
-    }
-
-    // Newer-style audio chunks
-    if (event.type === "response.audio.delta" && event.delta) {
-      if (!streamSid) {
-        logOnce(
-          flags,
-          "noStreamSidDelta",
-          "Cannot send audio back – no streamSid yet (delta)"
-        );
-        return;
-      }
-
-      console.log("Sending audio chunk (response.audio.delta) to Twilio");
-      ws.send(
-        JSON.stringify({
-          event: "media",
-          streamSid,
-          media: {
-            payload: event.delta, // base64 g711_ulaw
-          },
-        })
-      );
-      return;
-    }
-
-    // Older-style append events (safety net)
-    if (event.type === "output_audio_buffer.append" && event.audio) {
-      if (!streamSid) {
-        logOnce(
-          flags,
-          "noStreamSidAppend",
-          "Cannot send audio back – no streamSid yet (append)"
-        );
-        return;
-      }
-
-      console.log("Sending audio chunk (output_audio_buffer.append) to Twilio");
-      ws.send(
-        JSON.stringify({
-          event: "media",
-          streamSid,
-          media: {
-            payload: event.audio, // base64 g711_ulaw
-          },
-        })
-      );
-      return;
-    }
-
-    if (event.type === "error") {
-      console.error("OpenAI error event:", JSON.stringify(event, null, 2));
-    }
-  });
-
-  oaWs.on("close", () => {
-    console.log("OpenAI websocket closed");
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.close();
-    }
-  });
+oaWs.on("open", () => {
+console.log("✅ OpenAI Realtime socket opened");
+oaReady = true;
+sendSessionIfReady();
 });
 
-// Start HTTP server (Railway will set PORT)
+oaWs.on("error", (err) => {
+console.error("OpenAI websocket error:", err.message || err);
+});
+
+// 2) TWILIO → OPENAI
+ws.on("message", (msg) => {
+let data;
+try {
+data = JSON.parse(msg.toString());
+} catch {
+return;
+}
+
+if (data.event === "start") {
+console.log("Start event payload:", JSON.stringify(data.start, null, 2));
+
+streamSid = data.start?.streamSid || data.streamSid || null;
+
+const cpName = data.start?.customParameters?.name;
+if (cpName && cpName.trim()) {
+leadName = cpName.trim();
+console.log("Lead name from customParameters:", leadName);
+} else {
+console.log("No custom name in start event, using:", leadName);
+}
+
+console.log("Call started:", data.start?.callSid, "streamSid:", streamSid);
+
+sendSessionIfReady();
+maybeSendIntro();
+return;
+}
+
+if (data.event === "media") {
+if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
+logOnce(flags, "skipBeforeOpen", "Skipping media - OpenAI socket not open yet");
+return;
+}
+
+oaWs.send(
+JSON.stringify({
+type: "input_audio_buffer.append",
+audio: data.media.payload,
+})
+);
+return;
+}
+
+if (data.event === "stop") {
+console.log("Call ended from Twilio side");
+ws.close();
+oaWs.close();
+return;
+}
+});
+
+ws.on("close", () => {
+console.log("Twilio websocket closed");
+if (oaWs && oaWs.readyState === WebSocket.OPEN) {
+oaWs.close();
+}
+});
+
+// 3) OPENAI → TWILIO
+oaWs.on("message", (msg) => {
+let event;
+try {
+event = JSON.parse(msg.toString());
+} catch {
+return;
+}
+
+if (event.type) {
+console.log("OpenAI event:", event.type);
+}
+
+if (event.type === "response.done") {
+console.log("OpenAI finished a response.");
+aiSpeaking = false;
+}
+
+if (event.type === "response.audio.done") {
+aiSpeaking = false;
+}
+
+// BARGE-IN: caller starts speaking while Alex is talking
+if (event.type === "input_audio_buffer.speech_started") {
+const now = Date.now();
+
+if (aiSpeaking && now - lastBargeInAt > 500) {
+console.log("Caller interrupted — cancelling Alex and clearing Twilio audio");
+
+lastBargeInAt = now;
+aiSpeaking = false;
+
+if (oaWs && oaWs.readyState === WebSocket.OPEN) {
+oaWs.send(
+JSON.stringify({
+type: "response.cancel",
+})
+);
+}
+
+if (ws && ws.readyState === WebSocket.OPEN && streamSid) {
+ws.send(
+JSON.stringify({
+event: "clear",
+streamSid,
+})
+);
+}
+}
+}
+
+if (event.type === "response.audio.delta" && event.delta) {
+if (!streamSid) {
+logOnce(flags, "noStreamSidDelta", "Cannot send audio back – no streamSid yet (delta)");
+return;
+}
+
+aiSpeaking = true;
+
+console.log("Sending audio chunk (response.audio.delta) to Twilio");
+ws.send(
+JSON.stringify({
+event: "media",
+streamSid,
+media: {
+payload: event.delta,
+},
+})
+);
+return;
+}
+
+if (event.type === "output_audio_buffer.append" && event.audio) {
+if (!streamSid) {
+logOnce(flags, "noStreamSidAppend", "Cannot send audio back – no streamSid yet (append)");
+return;
+}
+
+aiSpeaking = true;
+
+console.log("Sending audio chunk (output_audio_buffer.append) to Twilio");
+ws.send(
+JSON.stringify({
+event: "media",
+streamSid,
+media: {
+payload: event.audio,
+},
+})
+);
+return;
+}
+
+if (event.type === "error") {
+console.error("OpenAI error event:", JSON.stringify(event, null, 2));
+}
+});
+
+oaWs.on("close", () => {
+console.log("OpenAI websocket closed");
+if (ws && ws.readyState === WebSocket.OPEN) {
+ws.close();
+}
+});
+});
+
+// Start HTTP server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+console.log(`Server running on port ${PORT}`);
 });
