@@ -373,17 +373,6 @@ type: "response.cancel",
 );
 }
 
-if (ws && ws.readyState === WebSocket.OPEN && streamSid) {
-ws.send(
-JSON.stringify({
-event: "clear",
-streamSid,
-})
-);
-}
-}
-}
-
 if (event.type === "response.audio.delta" && event.delta) {
 if (!streamSid) {
 logOnce(flags, "noStreamSidDelta", "Cannot send audio back – no streamSid yet (delta)");
