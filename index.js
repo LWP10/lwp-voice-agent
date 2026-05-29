@@ -66,9 +66,12 @@ if (!oaReady || !streamSid || sessionSent) return;
 const sessionUpdate = {
 type: "session.update",
 session: {
+type: "realtime",
+model: "gpt-realtime",
+
 input_audio_format: "g711_ulaw",
 output_audio_format: "g711_ulaw",
-modalities: ["audio", "text"],
+output_modalities: ["audio"],
 
 voice: "ballad",
 temperature: 0.7,
