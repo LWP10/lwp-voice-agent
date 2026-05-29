@@ -42,12 +42,11 @@ console.log("Lead name from WS query string:", leadName);
 console.error("Error parsing WS URL for name:", e.message || e);
 }
 
-// --- OpenAI Realtime socket state ---
 let oaReady = false;
 let sessionSent = false;
 let introSent = false;
 
-// --- Barge-in handling ---
+// Barge-in handling
 let aiSpeaking = false;
 let lastBargeInAt = 0;
 
@@ -305,7 +304,11 @@ return;
 
 if (data.event === "media") {
 if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
-logOnce(flags, "skipBeforeOpen", "Skipping media - OpenAI socket not open yet");
+logOnce(
+flags,
+"skipBeforeOpen",
+"Skipping media - OpenAI socket not open yet"
+);
 return;
 }
 
@@ -359,8 +362,8 @@ aiSpeaking = false;
 if (event.type === "input_audio_buffer.speech_started") {
 const now = Date.now();
 
-if (aiSpeaking && now - lastBargeInAt > 500) {
-console.log("Caller interrupted — cancelling Alex and clearing Twilio audio");
+if (aiSpeaking && now - lastBargeInAt > 1000) {
+console.log("Caller interrupted — cancelling Alex only");
 
 lastBargeInAt = now;
 aiSpeaking = false;
@@ -372,10 +375,18 @@ type: "response.cancel",
 })
 );
 }
+}
+
+return;
+}
 
 if (event.type === "response.audio.delta" && event.delta) {
 if (!streamSid) {
-logOnce(flags, "noStreamSidDelta", "Cannot send audio back – no streamSid yet (delta)");
+logOnce(
+flags,
+"noStreamSidDelta",
+"Cannot send audio back – no streamSid yet (delta)"
+);
 return;
 }
 
@@ -396,7 +407,11 @@ return;
 
 if (event.type === "output_audio_buffer.append" && event.audio) {
 if (!streamSid) {
-logOnce(flags, "noStreamSidAppend", "Cannot send audio back – no streamSid yet (append)");
+logOnce(
+flags,
+"noStreamSidAppend",
+"Cannot send audio back – no streamSid yet (append)"
+);
 return;
 }
 
