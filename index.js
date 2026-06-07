@@ -6,84 +6,89 @@ const { URL } = require("url");
 const app = express();
 const server = http.createServer(app);
 
-// Simple health-check route
 app.get("/", (req, res) => {
-res.send("LWP Voice Bot server is running.");
+  res.send("LWP Voice Bot server is running.");
 });
 
-// Twilio WebSocket server at /media
 const wss = new WebSocket.Server({ server, path: "/media" });
 
-// Helper to avoid spamming the same log line
 function logOnce(state, key, msg) {
-if (!state[key]) {
-console.log(msg);
-state[key] = true;
-}
+  if (!state[key]) {
+    console.log(msg);
+    state[key] = true;
+  }
 }
 
 wss.on("connection", (ws, req) => {
-console.log("Twilio connected to /media");
-console.log("Incoming WS URL:", req.url);
+  console.log("Twilio connected to /media");
+  console.log("Incoming WS URL:", req.url);
 
-const flags = {};
+  const flags = {};
 
-let leadName = "there";
-let streamSid = null;
+  let leadName = "there";
+  let streamSid = null;
 
-try {
-const fullUrl = new URL(req.url, "http://localhost");
-const qsName = fullUrl.searchParams.get("name");
-if (qsName && qsName.trim()) {
-leadName = qsName.trim();
-console.log("Lead name from WS query string:", leadName);
-}
-} catch (e) {
-console.error("Error parsing WS URL for name:", e.message || e);
-}
+  try {
+    const fullUrl = new URL(req.url, "http://localhost");
+    const qsName = fullUrl.searchParams.get("name");
+    if (qsName && qsName.trim()) {
+      leadName = qsName.trim();
+      console.log("Lead name from WS query string:", leadName);
+    }
+  } catch (e) {
+    console.error("Error parsing WS URL for name:", e.message || e);
+  }
 
-// --- OpenAI Realtime socket state ---
-let oaReady = false;
-let sessionSent = false;
-let introSent = false;
+  let oaReady = false;
+  let sessionSent = false;
+  let introSent = false;
 
-// --- Barge-in handling ---
-let aiSpeaking = false;
-let lastBargeInAt = 0;
+  let aiSpeaking = false;
+  let lastBargeInAt = 0;
 
-const oaWs = new WebSocket(
-"wss://api.openai.com/v1/realtime?model=gpt-realtime",
-{
-headers: {
-Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-},
-}
-);
+  const oaWs = new WebSocket(
+    "wss://api.openai.com/v1/realtime?model=gpt-realtime",
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+      },
+    }
+  );
 
-function sendSessionIfReady() {
-if (!oaReady || !streamSid || sessionSent) return;
+  function sendSessionIfReady() {
+    if (!oaReady || !streamSid || sessionSent) return;
 
-const sessionUpdate = {
-type: "session.update",
-session: {
-type: "realtime",
-model: "gpt-realtime",
+    const sessionUpdate = {
+      type: "session.update",
+      session: {
+        type: "realtime",
+        model: "gpt-realtime",
 
-input_audio_format: "g711_ulaw",
-output_audio_format: "g711_ulaw",
-output_modalities: ["audio"],
+        output_modalities: ["audio"],
 
-voice: "ballad",
-temperature: 0.7,
+        audio: {
+          input: {
+            format: {
+              type: "audio/pcmu",
+            },
+            turn_detection: {
+              type: "server_vad",
+              threshold: 0.5,
+              prefix_padding_ms: 400,
+              silence_duration_ms: 1600,
+            },
+          },
+          output: {
+            format: {
+              type: "audio/pcmu",
+            },
+            voice: "ballad",
+          },
+        },
 
-turn_detection: {
-type: "server_vad",
-threshold: 0.5,
-prefix_padding_ms: 400,
-silence_duration_ms: 1600,
-},
+        temperature: 0.7,
 
-instructions: `
+        instructions: `
 Only ever speak in **English**.
 
 You are **“Alex”**, a calm, measured, gender-neutral **British** virtual assistant (early 30s) calling from **Legacy Wills & Probate** in the UK.
@@ -231,23 +236,24 @@ IF THEY’RE NOT READY TO BOOK
 “No problem at all, ${leadName || "there"}. If you’d prefer to wait, that’s absolutely fine. If you ever want some help or a second opinion, you’re always welcome to get back in touch.”
 - Always end warmly, calmly, and politely.
 `,
-},
-};
+      },
+    };
 
-oaWs.send(JSON.stringify(sessionUpdate));
-sessionSent = true;
-console.log("Session instructions sent to OpenAI");
+    oaWs.send(JSON.stringify(sessionUpdate));
+    sessionSent = true;
+    console.log("Session instructions sent to OpenAI");
 
-maybeSendIntro();
-}
+    maybeSendIntro();
+  }
 
-function maybeSendIntro() {
-if (!oaReady || !sessionSent || !streamSid || introSent) return;
+  function maybeSendIntro() {
+    if (!oaReady || !sessionSent || !streamSid || introSent) return;
 
-const intro = {
-type: "response.create",
-response: {
-instructions: `
+    const intro = {
+      type: "response.create",
+      response: {
+        output_modalities: ["audio"],
+        instructions: `
 Start the conversation now with a short, calm, professional greeting.
 
 - Use the caller's name: ${leadName || "there"}.
@@ -258,191 +264,192 @@ Start the conversation now with a short, calm, professional greeting.
 - Keep the tone measured, not enthusiastic.
 - Ask only one question, then stop and wait for the caller to answer.
 `,
-},
-};
+      },
+    };
 
-oaWs.send(JSON.stringify(intro));
-introSent = true;
-console.log("Intro response.create sent to OpenAI");
-}
+    oaWs.send(JSON.stringify(intro));
+    introSent = true;
+    console.log("Intro response.create sent to OpenAI");
+  }
 
-oaWs.on("open", () => {
-console.log("✅ OpenAI Realtime socket opened");
-oaReady = true;
-sendSessionIfReady();
+  oaWs.on("open", () => {
+    console.log("✅ OpenAI Realtime socket opened");
+    oaReady = true;
+    sendSessionIfReady();
+  });
+
+  oaWs.on("error", (err) => {
+    console.error("OpenAI websocket error:", err.message || err);
+  });
+
+  ws.on("message", (msg) => {
+    let data;
+    try {
+      data = JSON.parse(msg.toString());
+    } catch {
+      return;
+    }
+
+    if (data.event === "start") {
+      console.log("Start event payload:", JSON.stringify(data.start, null, 2));
+
+      streamSid = data.start?.streamSid || data.streamSid || null;
+
+      const cpName = data.start?.customParameters?.name;
+      if (cpName && cpName.trim()) {
+        leadName = cpName.trim();
+        console.log("Lead name from customParameters:", leadName);
+      } else {
+        console.log("No custom name in start event, using:", leadName);
+      }
+
+      console.log("Call started:", data.start?.callSid, "streamSid:", streamSid);
+
+      sendSessionIfReady();
+      maybeSendIntro();
+      return;
+    }
+
+    if (data.event === "media") {
+      if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
+        logOnce(flags, "skipBeforeOpen", "Skipping media - OpenAI socket not open yet");
+        return;
+      }
+
+      oaWs.send(
+        JSON.stringify({
+          type: "input_audio_buffer.append",
+          audio: data.media.payload,
+        })
+      );
+      return;
+    }
+
+    if (data.event === "stop") {
+      console.log("Call ended from Twilio side");
+      ws.close();
+      oaWs.close();
+      return;
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("Twilio websocket closed");
+    if (oaWs && oaWs.readyState === WebSocket.OPEN) {
+      oaWs.close();
+    }
+  });
+
+  oaWs.on("message", (msg) => {
+    let event;
+    try {
+      event = JSON.parse(msg.toString());
+    } catch {
+      return;
+    }
+
+    if (event.type) {
+      console.log("OpenAI event:", event.type);
+    }
+
+    if (event.type === "response.done") {
+      console.log("OpenAI finished a response.");
+      aiSpeaking = false;
+    }
+
+    if (event.type === "response.output_audio.done") {
+      aiSpeaking = false;
+    }
+
+    if (event.type === "input_audio_buffer.speech_started") {
+      const now = Date.now();
+
+      if (aiSpeaking && now - lastBargeInAt > 500) {
+        console.log("Caller interrupted — cancelling Alex");
+
+        lastBargeInAt = now;
+        aiSpeaking = false;
+
+        if (oaWs && oaWs.readyState === WebSocket.OPEN) {
+          oaWs.send(JSON.stringify({ type: "response.cancel" }));
+        }
+      }
+    }
+
+    if (event.type === "response.output_audio.delta" && event.delta) {
+      if (!streamSid) {
+        logOnce(flags, "noStreamSidDelta", "Cannot send audio back – no streamSid yet");
+        return;
+      }
+
+      aiSpeaking = true;
+
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid,
+          media: {
+            payload: event.delta,
+          },
+        })
+      );
+      return;
+    }
+
+    if (event.type === "response.audio.delta" && event.delta) {
+      if (!streamSid) {
+        logOnce(flags, "noStreamSidDeltaOld", "Cannot send audio back – no streamSid yet");
+        return;
+      }
+
+      aiSpeaking = true;
+
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid,
+          media: {
+            payload: event.delta,
+          },
+        })
+      );
+      return;
+    }
+
+    if (event.type === "output_audio_buffer.append" && event.audio) {
+      if (!streamSid) {
+        logOnce(flags, "noStreamSidAppend", "Cannot send audio back – no streamSid yet");
+        return;
+      }
+
+      aiSpeaking = true;
+
+      ws.send(
+        JSON.stringify({
+          event: "media",
+          streamSid,
+          media: {
+            payload: event.audio,
+          },
+        })
+      );
+      return;
+    }
+
+    if (event.type === "error") {
+      console.error("OpenAI error event:", JSON.stringify(event, null, 2));
+    }
+  });
+
+  oaWs.on("close", () => {
+    console.log("OpenAI websocket closed");
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  });
 });
 
-oaWs.on("error", (err) => {
-console.error("OpenAI websocket error:", err.message || err);
-});
-
-// 2) TWILIO → OPENAI
-ws.on("message", (msg) => {
-let data;
-try {
-data = JSON.parse(msg.toString());
-} catch {
-return;
-}
-
-if (data.event === "start") {
-console.log("Start event payload:", JSON.stringify(data.start, null, 2));
-
-streamSid = data.start?.streamSid || data.streamSid || null;
-
-const cpName = data.start?.customParameters?.name;
-if (cpName && cpName.trim()) {
-leadName = cpName.trim();
-console.log("Lead name from customParameters:", leadName);
-} else {
-console.log("No custom name in start event, using:", leadName);
-}
-
-console.log("Call started:", data.start?.callSid, "streamSid:", streamSid);
-
-sendSessionIfReady();
-maybeSendIntro();
-return;
-}
-
-if (data.event === "media") {
-if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
-logOnce(flags, "skipBeforeOpen", "Skipping media - OpenAI socket not open yet");
-return;
-}
-
-oaWs.send(
-JSON.stringify({
-type: "input_audio_buffer.append",
-audio: data.media.payload,
-})
-);
-return;
-}
-
-if (data.event === "stop") {
-console.log("Call ended from Twilio side");
-ws.close();
-oaWs.close();
-return;
-}
-});
-
-ws.on("close", () => {
-console.log("Twilio websocket closed");
-if (oaWs && oaWs.readyState === WebSocket.OPEN) {
-oaWs.close();
-}
-});
-
-// 3) OPENAI → TWILIO
-oaWs.on("message", (msg) => {
-let event;
-try {
-event = JSON.parse(msg.toString());
-} catch {
-return;
-}
-
-if (event.type) {
-console.log("OpenAI event:", event.type);
-}
-
-if (event.type === "response.done") {
-console.log("OpenAI finished a response.");
-aiSpeaking = false;
-}
-
-if (event.type === "response.audio.done") {
-aiSpeaking = false;
-}
-
-// BARGE-IN: caller starts speaking while Alex is talking
-if (event.type === "input_audio_buffer.speech_started") {
-const now = Date.now();
-
-if (aiSpeaking && now - lastBargeInAt > 500) {
-console.log("Caller interrupted — cancelling Alex and clearing Twilio audio");
-
-lastBargeInAt = now;
-aiSpeaking = false;
-
-if (oaWs && oaWs.readyState === WebSocket.OPEN) {
-oaWs.send(
-JSON.stringify({
-type: "response.cancel",
-})
-);
-}
-
-if (ws && ws.readyState === WebSocket.OPEN && streamSid) {
-ws.send(
-JSON.stringify({
-event: "clear",
-streamSid,
-})
-);
-}
-}
-}
-
-if (event.type === "response.audio.delta" && event.delta) {
-if (!streamSid) {
-logOnce(flags, "noStreamSidDelta", "Cannot send audio back – no streamSid yet (delta)");
-return;
-}
-
-aiSpeaking = true;
-
-console.log("Sending audio chunk (response.audio.delta) to Twilio");
-ws.send(
-JSON.stringify({
-event: "media",
-streamSid,
-media: {
-payload: event.delta,
-},
-})
-);
-return;
-}
-
-if (event.type === "output_audio_buffer.append" && event.audio) {
-if (!streamSid) {
-logOnce(flags, "noStreamSidAppend", "Cannot send audio back – no streamSid yet (append)");
-return;
-}
-
-aiSpeaking = true;
-
-console.log("Sending audio chunk (output_audio_buffer.append) to Twilio");
-ws.send(
-JSON.stringify({
-event: "media",
-streamSid,
-media: {
-payload: event.audio,
-},
-})
-);
-return;
-}
-
-if (event.type === "error") {
-console.error("OpenAI error event:", JSON.stringify(event, null, 2));
-}
-});
-
-oaWs.on("close", () => {
-console.log("OpenAI websocket closed");
-if (ws && ws.readyState === WebSocket.OPEN) {
-ws.close();
-}
-});
-});
-
-// Start HTTP server
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-console.log(`Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
