@@ -7,449 +7,302 @@ const app = express();
 const server = http.createServer(app);
 
 app.get("/", (req, res) => {
-  res.send("LWP Voice Bot server is running.");
+res.send("LWP Voice Bot server is running.");
 });
 
 const wss = new WebSocket.Server({ server, path: "/media" });
 
 function logOnce(state, key, msg) {
-  if (!state[key]) {
-    console.log(msg);
-    state[key] = true;
-  }
+if (!state[key]) {
+console.log(msg);
+state[key] = true;
+}
 }
 
 wss.on("connection", (ws, req) => {
-  console.log("Twilio connected to /media");
-  console.log("Incoming WS URL:", req.url);
+console.log("Twilio connected to /media");
+console.log("Incoming WS URL:", req.url);
 
-  const flags = {};
+const flags = {};
 
-  let leadName = "there";
-  let streamSid = null;
+let leadName = "there";
+let streamSid = null;
 
-  try {
-    const fullUrl = new URL(req.url, "http://localhost");
-    const qsName = fullUrl.searchParams.get("name");
-    if (qsName && qsName.trim()) {
-      leadName = qsName.trim();
-      console.log("Lead name from WS query string:", leadName);
-    }
-  } catch (e) {
-    console.error("Error parsing WS URL for name:", e.message || e);
-  }
+try {
+const fullUrl = new URL(req.url, "http://localhost");
+const qsName = fullUrl.searchParams.get("name");
+if (qsName && qsName.trim()) {
+leadName = qsName.trim();
+console.log("Lead name from WS query string:", leadName);
+}
+} catch (e) {
+console.error("Error parsing WS URL for name:", e.message || e);
+}
 
-  let oaReady = false;
-  let sessionSent = false;
-  let introSent = false;
+let oaReady = false;
+let sessionSent = false;
+let introSent = false;
 
-  let aiSpeaking = false;
-  let lastBargeInAt = 0;
+let aiSpeaking = false;
+let lastBargeInAt = 0;
 
-  const oaWs = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-realtime",
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      },
-    }
-  );
+const oaWs = new WebSocket(
+"wss://api.openai.com/v1/realtime?model=gpt-realtime",
+{
+headers: {
+Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+},
+}
+);
 
-  function sendSessionIfReady() {
-    if (!oaReady || !streamSid || sessionSent) return;
+function sendSessionIfReady() {
+if (!oaReady || !streamSid || sessionSent) return;
 
-    const sessionUpdate = {
-      type: "session.update",
-      session: {
-        type: "realtime",
-        model: "gpt-realtime",
+const sessionUpdate = {
+type: "session.update",
+session: {
+type: "realtime",
+model: "gpt-realtime",
 
-        output_modalities: ["audio"],
+output_modalities: ["audio"],
 
-        audio: {
-          input: {
-            format: {
-              type: "audio/pcmu",
-            },
-            turn_detection: {
-              type: "server_vad",
-              threshold: 0.5,
-              prefix_padding_ms: 400,
-              silence_duration_ms: 1600,
-            },
-          },
-          output: {
-            format: {
-              type: "audio/pcmu",
-            },
-            voice: "ballad",
-          },
-        },
+audio: {
+input: {
+format: {
+type: "audio/pcmu",
+},
+turn_detection: {
+type: "server_vad",
+threshold: 0.5,
+prefix_padding_ms: 400,
+silence_duration_ms: 1600,
+},
+},
+output: {
+format: {
+type: "audio/pcmu",
+},
+voice: "ballad",
+},
+},
 
-        temperature: 0.7,
+instructions: `
+Only ever speak in English.
 
-        instructions: `
-Only ever speak in **English**.
+You are “Alex”, a calm, measured, gender-neutral British virtual assistant calling from Legacy Wills & Probate in the UK.
 
-You are **“Alex”**, a calm, measured, gender-neutral **British** virtual assistant (early 30s) calling from **Legacy Wills & Probate** in the UK.
-Your job is to have a natural conversation, understand the caller’s probate situation at a high level, and—if they seem ready—help arrange a free 30-minute consultation with a solicitor.
+The caller’s name is: ${leadName || "there"}.
+Do not ask for their name. Use their name naturally and occasionally, not constantly.
 
-The caller’s name is: **${leadName || "there"}**.
-Do **not** ask for their name. Use their name naturally and occasionally, not constantly.
+You must only ever speak in English. Never switch languages.
 
-------------------------------------------------------------
-LANGUAGE & VOICE
-------------------------------------------------------------
-- Always speak in clear, natural **British English**.
-- Never use Spanish or any other language.
-- Sound calm, professional, patient, and reassuring.
-- You are a legal intake assistant, not a salesperson.
-- Never sound enthusiastic, chirpy, pushy, rushed, or overexcited.
-- Never sound like a cold caller or appointment setter.
-- Keep your pace slow and steady.
-- Speak clearly and slightly more slowly than a normal casual conversation.
-- Never mention prompts, AI, Twilio, or OpenAI.
+Sound calm, professional, patient, and reassuring.
+You are a legal intake assistant, not a salesperson.
+Never sound enthusiastic, chirpy, pushy, rushed, or overexcited.
+Keep your pace slow and steady.
+Use short, plain sentences.
+Ask only one question at a time.
+After asking a question, stop speaking and wait for the caller’s answer.
+Never answer your own question.
+Never guess what the caller was about to say.
+Never interrupt or talk over the caller.
 
-------------------------------------------------------------
-CRITICAL LANGUAGE RULE
-------------------------------------------------------------
-**You must only ever speak in English.**
-Never switch languages.
-If the caller speaks in another language, respond: "Sorry, I can only assist you in English."
+Opening:
+Greet them calmly using their name.
+Say you are Alex calling from Legacy Wills & Probate.
+Mention they recently reached out about getting help with a probate matter.
+Explain you’ll ask a few quick questions and, if they’d like, help arrange a free 30-minute, no-obligation consultation with a solicitor.
+Ask if now is an okay time to talk.
 
-STYLE & RHYTHM
-------------------------------------------------------------
-- Talk like a real person, not like you’re reading a script.
-- Use contractions naturally: “I’m”, “you’re”, “that’s”.
-- Use short, plain sentences.
-- Maximum two short sentences before pausing.
-- Ask only one question at a time.
-- After asking a question, stop speaking and wait for the caller’s answer.
-- Never stack multiple questions together.
-- Never answer your own question.
-- Never guess what the caller was about to say.
-- Briefly summarise long answers in one short sentence, then move on.
+Key questions:
+1. Who has passed away, or who the probate relates to.
+2. Whether there is a will.
+3. Whether they are the executor, next of kin, or another relative.
+4. Whether the estate is likely under £325,000 or over £325,000.
 
-------------------------------------------------------------
-TURN-TAKING RULES
-------------------------------------------------------------
-- Never interrupt the caller.
-- Never talk over the caller.
-- If the caller begins speaking while you are speaking, stop immediately and listen.
-- Always wait until the caller has clearly finished speaking before replying.
-- If the caller pauses briefly, do not jump in too quickly.
-- If audio cuts out, the signal is poor, or you are not sure whether they have finished, wait before speaking.
-- If you are unsure whether the caller has finished, say:
-“I’m sorry — please go ahead.”
-- If you think you may have interrupted, say:
-“Sorry, I didn’t mean to interrupt — please go ahead.”
-- Do not continue speaking after asking a question unless the caller has replied.
-- Leave natural gaps in the conversation.
-
-------------------------------------------------------------
-PROFESSIONAL TONE
-------------------------------------------------------------
-- Be warm, but restrained.
-- Be helpful, but never overly eager.
-- Be polite, but never overfriendly.
-- Sound like someone handling a sensitive probate enquiry professionally.
-- This may be an emotional situation for the caller, so keep your tone respectful and steady.
-
-------------------------------------------------------------
-OVERALL GOAL
-------------------------------------------------------------
-- Understand who the estate concerns and what help they need.
-- Check roughly whether there is a will.
-- Check roughly whether the estate looks **under £325,000** or **over £325,000**.
-- If they seem ready, gently help them book a free 30-minute consultation.
-- If they are not ready, fully respect that—no pressure.
-
-------------------------------------------------------------
-OPENING
-------------------------------------------------------------
-- You speak **first**, as soon as the call connects.
-- Greet them calmly using their name, e.g. “Hi Daniel, it’s Alex calling from Legacy Wills & Probate.”
-- Mention briefly that you’re calling because they recently reached out about getting some help with a probate matter.
-- Explain that you’ll ask a few quick questions and, if they’d like, help arrange a free 30-minute, no-obligation consultation with a solicitor.
-- Ask if now is an okay time to talk.
-- Keep the opening measured and professional, not energetic.
-
-------------------------------------------------------------
-KEY QUESTIONS (GUIDELINE)
-------------------------------------------------------------
-1) Check broadly what’s going on:
-- Who has passed away, or who the probate relates to.
-- Whether they are the executor, next of kin, or another relative.
-- Be sensitive and respectful.
-
-2) Will / executor:
-- Ask if there is a will.
-- If YES: ask if they are the executor or another family member.
-- If NO: ask if they are the next of kin or another relative helping with things.
-
-3) Estate value (under / over £325k):
-- Ask: “Just so the solicitor can give you the right guidance, would you say the estate is likely under £325,000, or over £325,000?”
-- If they don’t know, reassure them that it’s okay and the solicitor can go through the details later.
-
-------------------------------------------------------------
-IF THE CALLER SAYS THEY’RE HANDLING PROBATE THEMSELVES
-------------------------------------------------------------
-- Acknowledge their effort and stress:
-- “That sounds like a lot to deal with, you’re doing really well handling it yourself.”
-- Make it clear you’re there to support, not judge.
-- If things sound complex or they say it’s getting tricky:
-- “If it starts to feel too much or complicated, that’s exactly what our solicitors can help you with in the free consultation.”
-
-------------------------------------------------------------
-BOOKING RULES
-------------------------------------------------------------
-- Only offer appointments **Monday–Friday, between 9am and 5pm UK time**.
-- Never offer evenings or weekends.
-- Ask what days or times work best for them.
-- Confirm the agreed slot back clearly:
-- Day, date, time, and that a solicitor will call them on their number.
-- Never invent a time or imply a booking unless they clearly agree.
-- If they are hesitant, keep the tone low-pressure and professional.
-
-------------------------------------------------------------
-LEGAL LIMITS
-------------------------------------------------------------
-- Never give detailed legal advice.
-- If they ask for legal advice, say:
+Never give legal advice.
+If they ask for legal advice, say:
 “That’s something a solicitor can help you with in the consultation. My role is just to take a few details and help arrange that for you if you’d like.”
 
-------------------------------------------------------------
-IF THE CALLER IS HARD TO HEAR
-------------------------------------------------------------
-- If the audio is unclear, ask politely for them to repeat themselves.
-- Say things like:
-“Sorry, the line just cut slightly — could you repeat that for me?”
-or
-“Sorry, I didn’t quite catch that — would you mind saying that again?”
-- Do not pretend you understood if you are unsure.
-
-------------------------------------------------------------
-IF THEY’RE NOT READY TO BOOK
-------------------------------------------------------------
-- Respect that completely, do not push.
-- Say something like:
-“No problem at all, ${leadName || "there"}. If you’d prefer to wait, that’s absolutely fine. If you ever want some help or a second opinion, you’re always welcome to get back in touch.”
-- Always end warmly, calmly, and politely.
+Only offer appointments Monday to Friday, between 9am and 5pm UK time.
+Never offer evenings or weekends.
+Never invent a booking unless they clearly agree.
 `,
-      },
-    };
+},
+};
 
-    oaWs.send(JSON.stringify(sessionUpdate));
-    sessionSent = true;
-    console.log("Session instructions sent to OpenAI");
+oaWs.send(JSON.stringify(sessionUpdate));
+sessionSent = true;
+console.log("Session instructions sent to OpenAI");
 
-    maybeSendIntro();
-  }
+maybeSendIntro();
+}
 
-  function maybeSendIntro() {
-    if (!oaReady || !sessionSent || !streamSid || introSent) return;
+function maybeSendIntro() {
+if (!oaReady || !sessionSent || !streamSid || introSent) return;
 
-    const intro = {
-      type: "response.create",
-      response: {
-        output_modalities: ["audio"],
-        instructions: `
+const intro = {
+type: "response.create",
+response: {
+instructions: `
 Start the conversation now with a short, calm, professional greeting.
 
-- Use the caller's name: ${leadName || "there"}.
-- Say you are Alex calling from Legacy Wills & Probate.
-- Mention you understand they recently reached out about getting some help with a probate matter.
-- Explain you’ll ask a few quick questions and, if they’d like, help arrange a free 30-minute, no-obligation consultation with a solicitor.
-- Finish by asking if now is an okay time to talk.
-- Keep the tone measured, not enthusiastic.
-- Ask only one question, then stop and wait for the caller to answer.
+Use the caller's name: ${leadName || "there"}.
+Say you are Alex calling from Legacy Wills & Probate.
+Mention you understand they recently reached out about getting some help with a probate matter.
+Explain you’ll ask a few quick questions and, if they’d like, help arrange a free 30-minute, no-obligation consultation with a solicitor.
+Finish by asking if now is an okay time to talk.
+
+Ask only one question, then stop and wait.
 `,
-      },
-    };
+},
+};
 
-    oaWs.send(JSON.stringify(intro));
-    introSent = true;
-    console.log("Intro response.create sent to OpenAI");
-  }
+oaWs.send(JSON.stringify(intro));
+introSent = true;
+console.log("Intro response.create sent to OpenAI");
+}
 
-  oaWs.on("open", () => {
-    console.log("✅ OpenAI Realtime socket opened");
-    oaReady = true;
-    sendSessionIfReady();
-  });
+oaWs.on("open", () => {
+console.log("✅ OpenAI Realtime socket opened");
+oaReady = true;
+sendSessionIfReady();
+});
 
-  oaWs.on("error", (err) => {
-    console.error("OpenAI websocket error:", err.message || err);
-  });
+oaWs.on("error", (err) => {
+console.error("OpenAI websocket error:", err.message || err);
+});
 
-  ws.on("message", (msg) => {
-    let data;
-    try {
-      data = JSON.parse(msg.toString());
-    } catch {
-      return;
-    }
+ws.on("message", (msg) => {
+let data;
+try {
+data = JSON.parse(msg.toString());
+} catch {
+return;
+}
 
-    if (data.event === "start") {
-      console.log("Start event payload:", JSON.stringify(data.start, null, 2));
+if (data.event === "start") {
+console.log("Start event payload:", JSON.stringify(data.start, null, 2));
 
-      streamSid = data.start?.streamSid || data.streamSid || null;
+streamSid = data.start?.streamSid || data.streamSid || null;
 
-      const cpName = data.start?.customParameters?.name;
-      if (cpName && cpName.trim()) {
-        leadName = cpName.trim();
-        console.log("Lead name from customParameters:", leadName);
-      } else {
-        console.log("No custom name in start event, using:", leadName);
-      }
+const cpName = data.start?.customParameters?.name;
+if (cpName && cpName.trim()) {
+leadName = cpName.trim();
+console.log("Lead name from customParameters:", leadName);
+} else {
+console.log("No custom name in start event, using:", leadName);
+}
 
-      console.log("Call started:", data.start?.callSid, "streamSid:", streamSid);
+console.log("Call started:", data.start?.callSid, "streamSid:", streamSid);
 
-      sendSessionIfReady();
-      maybeSendIntro();
-      return;
-    }
+sendSessionIfReady();
+maybeSendIntro();
+return;
+}
 
-    if (data.event === "media") {
-      if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
-        logOnce(flags, "skipBeforeOpen", "Skipping media - OpenAI socket not open yet");
-        return;
-      }
+if (data.event === "media") {
+if (!oaWs || oaWs.readyState !== WebSocket.OPEN) {
+logOnce(flags, "skipBeforeOpen", "Skipping media - OpenAI socket not open yet");
+return;
+}
 
-      oaWs.send(
-        JSON.stringify({
-          type: "input_audio_buffer.append",
-          audio: data.media.payload,
-        })
-      );
-      return;
-    }
+oaWs.send(
+JSON.stringify({
+type: "input_audio_buffer.append",
+audio: data.media.payload,
+})
+);
 
-    if (data.event === "stop") {
-      console.log("Call ended from Twilio side");
-      ws.close();
-      oaWs.close();
-      return;
-    }
-  });
+return;
+}
 
-  ws.on("close", () => {
-    console.log("Twilio websocket closed");
-    if (oaWs && oaWs.readyState === WebSocket.OPEN) {
-      oaWs.close();
-    }
-  });
+if (data.event === "stop") {
+console.log("Call ended from Twilio side");
+ws.close();
+oaWs.close();
+return;
+}
+});
 
-  oaWs.on("message", (msg) => {
-    let event;
-    try {
-      event = JSON.parse(msg.toString());
-    } catch {
-      return;
-    }
+ws.on("close", () => {
+console.log("Twilio websocket closed");
+if (oaWs && oaWs.readyState === WebSocket.OPEN) {
+oaWs.close();
+}
+});
 
-    if (event.type) {
-      console.log("OpenAI event:", event.type);
-    }
+oaWs.on("message", (msg) => {
+let event;
+try {
+event = JSON.parse(msg.toString());
+} catch {
+return;
+}
 
-    if (event.type === "response.done") {
-      console.log("OpenAI finished a response.");
-      aiSpeaking = false;
-    }
+if (event.type) {
+console.log("OpenAI event:", event.type);
+}
 
-    if (event.type === "response.output_audio.done") {
-      aiSpeaking = false;
-    }
+if (event.type === "response.done") {
+console.log("OpenAI finished a response.");
+aiSpeaking = false;
+}
 
-    if (event.type === "input_audio_buffer.speech_started") {
-      const now = Date.now();
+if (event.type === "response.output_audio.done") {
+aiSpeaking = false;
+}
 
-      if (aiSpeaking && now - lastBargeInAt > 500) {
-        console.log("Caller interrupted — cancelling Alex");
+if (event.type === "input_audio_buffer.speech_started") {
+const now = Date.now();
 
-        lastBargeInAt = now;
-        aiSpeaking = false;
+if (aiSpeaking && now - lastBargeInAt > 500) {
+console.log("Caller interrupted — cancelling Alex");
 
-        if (oaWs && oaWs.readyState === WebSocket.OPEN) {
-          oaWs.send(JSON.stringify({ type: "response.cancel" }));
-        }
-      }
-    }
+lastBargeInAt = now;
+aiSpeaking = false;
 
-    if (event.type === "response.output_audio.delta" && event.delta) {
-      if (!streamSid) {
-        logOnce(flags, "noStreamSidDelta", "Cannot send audio back – no streamSid yet");
-        return;
-      }
+if (oaWs && oaWs.readyState === WebSocket.OPEN) {
+oaWs.send(JSON.stringify({ type: "response.cancel" }));
+}
+}
+}
 
-      aiSpeaking = true;
+if (event.type === "response.output_audio.delta" && event.delta) {
+if (!streamSid) {
+logOnce(flags, "noStreamSidDelta", "Cannot send audio back – no streamSid yet");
+return;
+}
 
-      ws.send(
-        JSON.stringify({
-          event: "media",
-          streamSid,
-          media: {
-            payload: event.delta,
-          },
-        })
-      );
-      return;
-    }
+aiSpeaking = true;
 
-    if (event.type === "response.audio.delta" && event.delta) {
-      if (!streamSid) {
-        logOnce(flags, "noStreamSidDeltaOld", "Cannot send audio back – no streamSid yet");
-        return;
-      }
+ws.send(
+JSON.stringify({
+event: "media",
+streamSid,
+media: {
+payload: event.delta,
+},
+})
+);
 
-      aiSpeaking = true;
+return;
+}
 
-      ws.send(
-        JSON.stringify({
-          event: "media",
-          streamSid,
-          media: {
-            payload: event.delta,
-          },
-        })
-      );
-      return;
-    }
+if (event.type === "error") {
+console.error("OpenAI error event:", JSON.stringify(event, null, 2));
+}
+});
 
-    if (event.type === "output_audio_buffer.append" && event.audio) {
-      if (!streamSid) {
-        logOnce(flags, "noStreamSidAppend", "Cannot send audio back – no streamSid yet");
-        return;
-      }
-
-      aiSpeaking = true;
-
-      ws.send(
-        JSON.stringify({
-          event: "media",
-          streamSid,
-          media: {
-            payload: event.audio,
-          },
-        })
-      );
-      return;
-    }
-
-    if (event.type === "error") {
-      console.error("OpenAI error event:", JSON.stringify(event, null, 2));
-    }
-  });
-
-  oaWs.on("close", () => {
-    console.log("OpenAI websocket closed");
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.close();
-    }
-  });
+oaWs.on("close", () => {
+console.log("OpenAI websocket closed");
+if (ws && ws.readyState === WebSocket.OPEN) {
+ws.close();
+}
+});
 });
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+console.log(`Server running on port ${PORT}`);
 });
